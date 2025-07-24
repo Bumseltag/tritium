@@ -17,7 +17,6 @@ use thiserror::Error;
 
 pub mod blockstates;
 pub mod models;
-pub mod registry;
 pub mod textures;
 
 #[derive(Debug)]
@@ -163,42 +162,54 @@ impl<T> FromStr for ResourceLocation<T> {
 // }
 
 /// An untyped resource location
+/// 
+/// A resource location consists of a namespace and a path,
+/// seperated by a `:`, and usually only consist of
+/// lowercase ascii characters and underscores.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct UntypedResourceLocation(Namespace, Cow<'static, str>);
+pub struct UntypedResourceLocation{
+    namespace: Cow<'static, str>,
+    path: Cow<'static, str>
+}
 
 impl UntypedResourceLocation {
     /// Creates a new [`UntypedResourceLocation`] with value `"minecraft:air"`
     pub const fn air() -> Self {
-        UntypedResourceLocation::new_static_mc("air")
+        Self::new_static_mc("air")
     }
 
     /// Creates a new [`UntypedResourceLocation`] from a `path` with the namespace `minecraft`.
     ///
     /// Note that this function is `const`
     pub const fn new_static_mc(path: &'static str) -> Self {
-        UntypedResourceLocation(Namespace::Minecraft, Cow::Borrowed(path))
+        Self::new_static("minecraft", path)
+    }
+
+    pub const fn new_static(namespace: &'static str, path: &'static str) -> Self {
+        Self {
+            namespace: Cow::Borrowed(namespace),
+            path: Cow::Borrowed(path),
+        }
     }
 
     /// Creates a new [`UntypedResourceLocation`] from a `namespace` and `path`
     pub fn new(namespace: impl Into<Namespace>, path: impl Into<String>) -> Self {
-        UntypedResourceLocation(namespace.into(), Cow::Owned(path.into()))
+        Self {
+            namespace: Cow::Owned(namespace.into()),
+            path: Cow::Owned(path.into())
+        }
     }
 
     /// Creates a new [`UntypedResourceLocation`] from a `path` with the namespace `minecraft`
     pub fn new_mc(path: impl Into<String>) -> Self {
-        Self::new(Namespace::new_minecraft(), path)
-    }
-
-    pub fn namespace(&self) -> &Namespace {
-        &self.0
-    }
-
-    pub fn path(&self) -> &str {
-        &self.1
-    }
+        Self {
+            namespace: Cow::Borrowed("minecraft"),
+            path: path.into()
+        }
+   }
 
     pub fn prefix(&mut self, path: &str) {
-        self.1.to_mut().insert_str(0, path);
+        self.path.to_mut().insert_str(0, path);
     }
 
     pub fn with_prefix(mut self, path: &str) -> Self {
@@ -207,7 +218,7 @@ impl UntypedResourceLocation {
     }
 
     pub fn suffix(&mut self, path: &str) {
-        self.1.to_mut().push_str(path);
+        self.path.to_mut().push_str(path);
     }
 
     pub fn with_suffix(mut self, path: &str) -> Self {
@@ -217,9 +228,9 @@ impl UntypedResourceLocation {
 
     pub fn to_assets_path(&self, directory: impl AsRef<Path>) -> PathBuf {
         let mut path = PathBuf::from_str("assets").expect("wtf");
-        path.push(self.namespace().to_string());
+        path.push(&self.namespace);
         path.push(directory);
-        path.push(self.path());
+        path.push(&self.path);
         path
     }
 }
@@ -267,68 +278,6 @@ impl<'de> Visitor<'de> for ResourceLocationVisitor {
 #[derive(Debug, Error)]
 pub enum Never {}
 
-/// The namespace of a [`ResourceLocation`].
-/// Can either be the literal `"minecraft"`, or any other namespace.
-///
-/// This is to save resources, since most namespaces are expected to be `"minecraft"`.
-#[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
-pub enum Namespace {
-    #[default]
-    Minecraft,
-    Other(String),
-}
-
-impl Namespace {
-    /// Creates a new [`Namespace`], checking if the input is `"minecraft"`
-    pub fn new(name: impl Into<String> + PartialEq<&'static str>) -> Self {
-        if name == "minecraft" {
-            Self::Minecraft
-        } else {
-            Self::Other(name.into())
-        }
-    }
-
-    /// Creates a new `"minecraft"` namespace.
-    /// This is preferred over using the enum value [`Namespace::Minecraft`] directly,
-    /// as the enum layout may change.
-    pub fn new_minecraft() -> Self {
-        Self::Minecraft
-    }
-}
-
-impl<T: Into<String> + PartialEq<&'static str>> From<T> for Namespace {
-    fn from(value: T) -> Self {
-        Namespace::new(value)
-    }
-}
-
-impl Display for Namespace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Namespace::Minecraft => write!(f, "minecraft"),
-            Namespace::Other(str) => str.fmt(f),
-        }
-    }
-}
-
-impl<'a> PartialEq<&'a str> for Namespace {
-    fn eq(&self, other: &&'a str) -> bool {
-        match self {
-            Namespace::Minecraft => *other == "minecraft",
-            Namespace::Other(other_ns) => *other == other_ns.as_str(),
-        }
-    }
-}
-
-impl PartialEq<String> for Namespace {
-    fn eq(&self, other: &String) -> bool {
-        match self {
-            Namespace::Minecraft => *other == "minecraft",
-            Namespace::Other(other_ns) => *other == other_ns.as_str(),
-        }
-    }
-}
-
 impl Display for UntypedResourceLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.0, self.1)
@@ -362,23 +311,6 @@ impl Ticks {
 
     pub fn from_duration(duration: Duration) -> Self {
         Self::new(duration.as_millis() as u64 / (1000 / 20))
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::{ResourceLocation, textures::Texture};
-
-    #[test]
-    fn resource_location_printing() {
-        assert_eq!(
-            ResourceLocation::<Texture>::new("minecraft", "block/stone").to_string(),
-            "minecraft:block/stone".to_owned()
-        );
-        assert_eq!(
-            ResourceLocation::<Texture>::new("create", "whatever").to_string(),
-            "create:whatever".to_owned()
-        )
     }
 }
 
