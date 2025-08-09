@@ -74,7 +74,7 @@ impl Registries {
                         ToLoader::GenChunk(pos) => {
                             let chunk = Box::new(Chunk::example_chunk(&mut reg).await);
                             let culled_chunk = CulledChunk::new(chunk);
-                            let chunk_mesh = culled_chunk.to_mesh(&reg).unwrap().to_bevy_mesh();
+                            let chunk_mesh = culled_chunk.to_mesh().unwrap().to_bevy_mesh();
                             reg.from_loader_send
                                 .send(FromLoader::LoadedChunk(pos, chunk_mesh))
                                 .await
