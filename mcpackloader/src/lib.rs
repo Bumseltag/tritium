@@ -32,16 +32,16 @@ impl<T> ResourceLocation<T> {
     }
 
     /// Creates a new [`ResourceLocation`] from a `namespace` and `path`
-    pub fn new(namespace: impl Into<Namespace>, path: impl Into<String>) -> Self {
+    pub fn new(namespace: impl Into<String>, path: impl Into<String>) -> Self {
         Self(UntypedResourceLocation::new(namespace, path), PhantomData)
     }
 
     /// Creates a new [`ResourceLocation`] from a `path` with the namespace `minecraft`
     pub fn new_mc(path: impl Into<String>) -> Self {
-        Self::new(Namespace::new_minecraft(), path)
+        Self(UntypedResourceLocation::new_mc(path), PhantomData)
     }
 
-    pub fn namespace(&self) -> &Namespace {
+    pub fn namespace(&self) -> &str {
         self.0.namespace()
     }
 
@@ -162,14 +162,14 @@ impl<T> FromStr for ResourceLocation<T> {
 // }
 
 /// An untyped resource location
-/// 
+///
 /// A resource location consists of a namespace and a path,
 /// seperated by a `:`, and usually only consist of
 /// lowercase ascii characters and underscores.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct UntypedResourceLocation{
+pub struct UntypedResourceLocation {
     namespace: Cow<'static, str>,
-    path: Cow<'static, str>
+    path: Cow<'static, str>,
 }
 
 impl UntypedResourceLocation {
@@ -193,10 +193,10 @@ impl UntypedResourceLocation {
     }
 
     /// Creates a new [`UntypedResourceLocation`] from a `namespace` and `path`
-    pub fn new(namespace: impl Into<Namespace>, path: impl Into<String>) -> Self {
+    pub fn new(namespace: impl Into<String>, path: impl Into<String>) -> Self {
         Self {
             namespace: Cow::Owned(namespace.into()),
-            path: Cow::Owned(path.into())
+            path: Cow::Owned(path.into()),
         }
     }
 
@@ -204,9 +204,17 @@ impl UntypedResourceLocation {
     pub fn new_mc(path: impl Into<String>) -> Self {
         Self {
             namespace: Cow::Borrowed("minecraft"),
-            path: path.into()
+            path: Cow::Owned(path.into()),
         }
-   }
+    }
+
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
 
     pub fn prefix(&mut self, path: &str) {
         self.path.to_mut().insert_str(0, path);
@@ -228,9 +236,9 @@ impl UntypedResourceLocation {
 
     pub fn to_assets_path(&self, directory: impl AsRef<Path>) -> PathBuf {
         let mut path = PathBuf::from_str("assets").expect("wtf");
-        path.push(&self.namespace);
+        path.push(self.namespace.as_ref());
         path.push(directory);
-        path.push(&self.path);
+        path.push(self.path.as_ref());
         path
     }
 }
@@ -280,7 +288,7 @@ pub enum Never {}
 
 impl Display for UntypedResourceLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.0, self.1)
+        write!(f, "{}:{}", self.namespace, self.path)
     }
 }
 
