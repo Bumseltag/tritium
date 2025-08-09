@@ -102,13 +102,13 @@ impl Chunk {
         Chunk { palette, data }
     }
 
-    pub fn index(&self, at: &U16Vec3) -> &(Block, LoadedBlock) {
+    pub fn index_unchecked(&self, at: &U16Vec3) -> &(Block, LoadedBlock) {
         let palette_id =
             self.data[at.x as usize + (16 * at.z as usize) + (const { 16 * 16 } * at.y as usize)];
         &self.palette[palette_id as usize]
     }
 
-    pub fn index_checked(&self, at: &I16Vec3) -> &(Block, LoadedBlock) {
+    pub fn index_or_air(&self, at: &I16Vec3) -> &(Block, LoadedBlock) {
         if !(0..16).contains(&at.x)
             || !(0..CHUNK_HEIGHT as i16).contains(&at.y)
             || !(0..16).contains(&at.z)
@@ -165,17 +165,11 @@ impl CulledChunk {
     }
 
     #[instrument(skip_all)]
-    pub fn to_mesh(&self, registries: &Registries) -> Result<CullableMesh, ResourceParseError> {
+    pub fn to_mesh(&self) -> Result<CullableMesh, ResourceParseError> {
         let mut res = CullableMesh::new();
         for (pos, faces) in &self.non_culled {
-            let mut block = self
-                .chunk
-                .index(pos)
-                .1
-                .clone()
-                .into_mesh(*faces, registries)?;
-            block.translate(&pos.as_vec3());
-            res.extend(&block);
+            let block = &self.chunk.index_unchecked(pos).1;
+            block.to_mesh(&mut res, *faces, &pos.as_vec3());
         }
         Ok(res)
     }
@@ -214,8 +208,8 @@ impl CulledChunk {
     }
 
     fn try_inner_cull(chunk: &Chunk, pos: U16Vec3, non_culled: &mut Vec<(U16Vec3, DirectionBits)>) {
-        let block = chunk.index(&pos);
-        let non_empty = !block.1.parts.is_empty();
+        let block = chunk.index_unchecked(&pos);
+        let non_empty = !block.1.empty;
         if non_empty {
             let dirs = Self::gen_block_culling_data_unchecked(chunk, &pos);
             if (!dirs.is_empty()) || block.1.never_culled {
@@ -225,7 +219,7 @@ impl CulledChunk {
     }
 
     fn try_edge_cull(chunk: &Chunk, pos: U16Vec3, non_culled: &mut Vec<(U16Vec3, DirectionBits)>) {
-        let non_empty = !chunk.index(&pos).1.parts.is_empty();
+        let non_empty = !chunk.index_unchecked(&pos).1.empty;
         if non_empty {
             let dirs = Self::gen_block_culling_data(chunk, &pos.as_i16vec3());
             non_culled.push((pos, dirs));
@@ -235,27 +229,27 @@ impl CulledChunk {
     fn gen_block_culling_data_unchecked(chunk: &Chunk, block: &U16Vec3) -> DirectionBits {
         DirectionBits::from_each(
             !chunk
-                .index(&U16Vec3::new(block.x, block.y + 1, block.z))
+                .index_unchecked(&U16Vec3::new(block.x, block.y + 1, block.z))
                 .1
                 .full_block,
             !chunk
-                .index(&U16Vec3::new(block.x, block.y - 1, block.z))
+                .index_unchecked(&U16Vec3::new(block.x, block.y - 1, block.z))
                 .1
                 .full_block,
             !chunk
-                .index(&U16Vec3::new(block.x, block.y, block.z - 1))
+                .index_unchecked(&U16Vec3::new(block.x, block.y, block.z - 1))
                 .1
                 .full_block,
             !chunk
-                .index(&U16Vec3::new(block.x, block.y, block.z + 1))
+                .index_unchecked(&U16Vec3::new(block.x, block.y, block.z + 1))
                 .1
                 .full_block,
             !chunk
-                .index(&U16Vec3::new(block.x + 1, block.y, block.z))
+                .index_unchecked(&U16Vec3::new(block.x + 1, block.y, block.z))
                 .1
                 .full_block,
             !chunk
-                .index(&U16Vec3::new(block.x - 1, block.y, block.z))
+                .index_unchecked(&U16Vec3::new(block.x - 1, block.y, block.z))
                 .1
                 .full_block,
         )
@@ -264,27 +258,27 @@ impl CulledChunk {
     fn gen_block_culling_data(chunk: &Chunk, block: &I16Vec3) -> DirectionBits {
         DirectionBits::from_each(
             !chunk
-                .index_checked(&I16Vec3::new(block.x, block.y + 1, block.z))
+                .index_or_air(&I16Vec3::new(block.x, block.y + 1, block.z))
                 .1
                 .full_block,
             !chunk
-                .index_checked(&I16Vec3::new(block.x, block.y - 1, block.z))
+                .index_or_air(&I16Vec3::new(block.x, block.y - 1, block.z))
                 .1
                 .full_block,
             !chunk
-                .index_checked(&I16Vec3::new(block.x, block.y, block.z - 1))
+                .index_or_air(&I16Vec3::new(block.x, block.y, block.z - 1))
                 .1
                 .full_block,
             !chunk
-                .index_checked(&I16Vec3::new(block.x, block.y, block.z + 1))
+                .index_or_air(&I16Vec3::new(block.x, block.y, block.z + 1))
                 .1
                 .full_block,
             !chunk
-                .index_checked(&I16Vec3::new(block.x + 1, block.y, block.z))
+                .index_or_air(&I16Vec3::new(block.x + 1, block.y, block.z))
                 .1
                 .full_block,
             !chunk
-                .index_checked(&I16Vec3::new(block.x - 1, block.y, block.z))
+                .index_or_air(&I16Vec3::new(block.x - 1, block.y, block.z))
                 .1
                 .full_block,
         )
@@ -387,18 +381,20 @@ impl Block {
 
 #[derive(Default, Clone)]
 pub struct LoadedBlock {
-    pub parts: Vec<(CullableMeshSet, HashMap<u64, String>)>,
+    pub mesh: CullableMeshSet,
     pub full_block: bool,
     pub never_culled: bool,
+    pub empty: bool,
 }
 
 impl LoadedBlock {
     /// Creates a new empty block
     pub const fn new() -> Self {
         Self {
-            parts: Vec::new(),
+            mesh: CullableMeshSet::new(),
             full_block: false,
             never_culled: false,
+            empty: true,
         }
     }
 
@@ -439,29 +435,39 @@ impl LoadedBlock {
 
         let never_culled = !mesh.never_culled.faces.is_empty();
 
+        let resolved_textures = model
+            .textures
+            .iter()
+            .map(|(id, tx)| {
+                Ok((
+                    *id,
+                    registries
+                        .get(&resolve_texture(&model.textures, tx).unwrap())
+                        .unwrap()?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>, ResourceParseError>>()?;
+
+        mesh.map_uvs(&resolved_textures);
+
         Ok(LoadedBlock {
-            parts: vec![(model.mesh.unwrap(), model.textures)],
+            mesh: model.mesh.unwrap(),
             full_block: model.full_block.unwrap(),
             never_culled,
+            empty: false,
         })
     }
 
     pub fn add(&mut self, other: LoadedBlock) {
-        self.parts.extend_from_slice(&other.parts);
+        // self.parts.extend_from_slice(&other.parts);
+        self.mesh.extend(&other.mesh);
         self.full_block |= other.full_block;
         self.never_culled |= other.never_culled;
+        self.empty &= other.empty;
     }
 
-    pub fn into_mesh(
-        self,
-        faces: DirectionBits,
-        registries: &Registries,
-    ) -> Result<CullableMesh, ResourceParseError> {
-        let mut mesh = CullableMesh::new();
-        for (meshset, textures) in self.parts {
-            mesh.extend(&meshset.merge(faces, &textures, registries)?);
-        }
-        Ok(mesh)
+    pub fn to_mesh(&self, to: &mut CullableMesh, faces: DirectionBits, pos: &Vec3) {
+        self.mesh.merge_to(to, faces, pos);
     }
 }
 
@@ -634,16 +640,48 @@ fn resolve_texture(
 }
 
 impl CullableMeshSet {
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self {
+            up: CullableMesh::new(),
+            down: CullableMesh::new(),
+            north: CullableMesh::new(),
+            south: CullableMesh::new(),
+            west: CullableMesh::new(),
+            east: CullableMesh::new(),
+            never_culled: CullableMesh::new(),
+        }
     }
 
-    pub fn merge(
-        &self,
-        faces: DirectionBits,
-        textures: &HashMap<u64, String>,
-        registries: &Registries,
-    ) -> Result<CullableMesh, ResourceParseError> {
+    pub fn merge_to(&self, merged_mesh: &mut CullableMesh, faces: DirectionBits, pos: &Vec3) {
+        let prev_len = merged_mesh.faces.len();
+        if faces.contains(DirectionBits::UP) {
+            merged_mesh.extend(&self.up);
+        }
+        if faces.contains(DirectionBits::DOWN) {
+            merged_mesh.extend(&self.down);
+        }
+
+        if faces.contains(DirectionBits::NORTH) {
+            merged_mesh.extend(&self.north);
+        }
+
+        if faces.contains(DirectionBits::SOUTH) {
+            merged_mesh.extend(&self.south);
+        }
+
+        if faces.contains(DirectionBits::EAST) {
+            merged_mesh.extend(&self.east);
+        }
+
+        if faces.contains(DirectionBits::WEST) {
+            merged_mesh.extend(&self.west);
+        }
+        for face in &mut merged_mesh.faces[prev_len..] {
+            face.translate(pos);
+        }
+    }
+
+    pub fn merge(&self, faces: DirectionBits) -> CullableMesh {
         let meshes = faces
             .iter()
             .map(|face| match face {
@@ -661,21 +699,7 @@ impl CullableMeshSet {
             merged_mesh.extend(mesh);
         }
 
-        let resolved_textures = textures
-            .iter()
-            .map(|(id, tx)| {
-                Ok((
-                    *id,
-                    registries
-                        .get(&resolve_texture(textures, tx).unwrap())
-                        .unwrap()?,
-                ))
-            })
-            .collect::<Result<HashMap<_, _>, ResourceParseError>>()?;
-
-        merged_mesh.map_uvs(&resolved_textures);
-
-        Ok(merged_mesh)
+        merged_mesh
     }
 
     pub fn push_new_cuboid(&mut self, cuboid: Element) {
@@ -782,6 +806,26 @@ impl CullableMeshSet {
         self.west.translate(by);
         self.never_culled.translate(by);
     }
+
+    pub fn map_uvs(&mut self, textures: &HashMap<u64, &LoadedTexture>) {
+        self.up.map_uvs(textures);
+        self.down.map_uvs(textures);
+        self.north.map_uvs(textures);
+        self.south.map_uvs(textures);
+        self.east.map_uvs(textures);
+        self.west.map_uvs(textures);
+        self.never_culled.map_uvs(textures);
+    }
+
+    pub fn extend(&mut self, by: &CullableMeshSet) {
+        self.up.extend(&by.up);
+        self.down.extend(&by.down);
+        self.north.extend(&by.north);
+        self.south.extend(&by.south);
+        self.east.extend(&by.east);
+        self.west.extend(&by.west);
+        self.never_culled.extend(&by.never_culled);
+    }
 }
 
 #[derive(Default, Clone)]
@@ -797,8 +841,8 @@ fn map_uv(uv1: [f32; 2], uv2: &Vec2) -> [f32; 2] {
 }
 
 impl CullableMesh {
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self { faces: vec![] }
     }
 
     pub fn from_faces(faces: Vec<Face>) -> Self {
@@ -910,6 +954,7 @@ impl CullableMesh {
     }
 
     /// Creates a new bevy mesh, expects this mesh to already be uv-mapped using [`Self::map_uvs`]
+    #[instrument(skip_all)]
     pub fn to_bevy_mesh(&self) -> Mesh {
         Mesh::new(
             PrimitiveTopology::TriangleList,
