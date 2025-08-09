@@ -681,27 +681,6 @@ impl CullableMeshSet {
         }
     }
 
-    pub fn merge(&self, faces: DirectionBits) -> CullableMesh {
-        let meshes = faces
-            .iter()
-            .map(|face| match face {
-                DirectionBits::DOWN => &self.down,
-                DirectionBits::UP => &self.up,
-                DirectionBits::NORTH => &self.north,
-                DirectionBits::SOUTH => &self.south,
-                DirectionBits::WEST => &self.west,
-                DirectionBits::EAST => &self.east,
-                _ => unreachable!(),
-            })
-            .chain(Some(&self.never_culled));
-        let mut merged_mesh = CullableMesh::new();
-        for mesh in meshes {
-            merged_mesh.extend(mesh);
-        }
-
-        merged_mesh
-    }
-
     pub fn push_new_cuboid(&mut self, cuboid: Element) {
         let from = cuboid.from.to_glam() / 16.0;
         let to = cuboid.to.to_glam() / 16.0;
@@ -796,17 +775,6 @@ impl CullableMeshSet {
         self.west.rotate(by);
         self.never_culled.rotate(by);
     }
-
-    pub fn translate(&mut self, by: &Vec3) {
-        self.up.translate(by);
-        self.down.translate(by);
-        self.north.translate(by);
-        self.south.translate(by);
-        self.east.translate(by);
-        self.west.translate(by);
-        self.never_culled.translate(by);
-    }
-
     pub fn map_uvs(&mut self, textures: &HashMap<u64, &LoadedTexture>) {
         self.up.map_uvs(textures);
         self.down.map_uvs(textures);
@@ -845,18 +813,8 @@ impl CullableMesh {
         Self { faces: vec![] }
     }
 
-    pub fn from_faces(faces: Vec<Face>) -> Self {
-        CullableMesh { faces }
-    }
-
     pub fn push_face(&mut self, face: Face) {
         self.faces.push(face);
-    }
-
-    pub fn translate(&mut self, by: &Vec3) {
-        for rect in &mut self.faces {
-            rect.translate(by);
-        }
     }
 
     pub fn rotate(&mut self, by: &ElementRotation) {
@@ -920,20 +878,6 @@ impl CullableMesh {
             res[i + 1] = face.mesh[1].uv;
             res[i + 2] = face.mesh[2].uv;
             res[i + 3] = face.mesh[3].uv;
-            i += 4;
-        }
-        res
-    }
-
-    pub fn create_mapped_uvs(&self, textures: &HashMap<u64, &LoadedTexture>) -> Vec<[f32; 2]> {
-        let mut res = vec![[0.0, 0.0]; self.faces.len() * 4];
-        let mut i = 0;
-        for face in &self.faces {
-            let base = &textures[&face.texture_id].atlas_pos;
-            res[i] = map_uv(face.mesh[0].uv, base);
-            res[i + 1] = map_uv(face.mesh[1].uv, base);
-            res[i + 2] = map_uv(face.mesh[2].uv, base);
-            res[i + 3] = map_uv(face.mesh[3].uv, base);
             i += 4;
         }
         res

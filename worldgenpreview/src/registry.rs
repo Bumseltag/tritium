@@ -123,7 +123,7 @@ impl Registries {
         while let Ok(msg) = channels.from_loader.try_recv() {
             match msg {
                 FromLoader::LoadedChunk(pos, mesh) => {
-                    let span = info_span!("LoadedChunk").entered();
+                    let _ = info_span!("LoadedChunk").entered();
                     images
                         .get(&atlas.atlas)
                         .unwrap()
@@ -140,7 +140,7 @@ impl Registries {
                     ));
                 }
                 FromLoader::LoadTextureIntoAtlas(texture) => {
-                    let span = info_span!("LoadTextureIntoAtlas").entered();
+                    let _ = info_span!("LoadTextureIntoAtlas").entered();
                     let image = Image::from_dynamic(
                         DynamicImage::from(*texture),
                         true,

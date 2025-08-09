@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-channel = "2.5.0"
-bevy = { version = "0.16.1", features = ["dynamic_linking", "trace_tracy"] }
+bevy = { version = "0.16.1", features = ["dynamic_linking"] }
 bevy_framepace = "0.19.1"
 bitflags = "2.9.1"
 guillotiere = "0.6.2"
@@ -23,3 +23,8 @@ opt-level = 1
 # Enable a large amount of optimization in the dev profile for dependencies.
 [profile.dev.package."*"]
 opt-level = 3
+
+[features]
+default = ["trace"]
+trace = ["bevy/trace_tracy"]
+log_frametime = []

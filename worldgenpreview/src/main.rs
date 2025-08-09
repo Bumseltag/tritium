@@ -1,9 +1,6 @@
-use bevy::{
-    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    input::mouse::MouseMotion,
-    prelude::*,
-    window::PresentMode,
-};
+use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, input::mouse::MouseMotion, prelude::*};
+#[cfg(feature = "log_frametime")]
+use bevy::{diagnostic::LogDiagnosticsPlugin, window::PresentMode};
 use bevy_framepace::FramepacePlugin;
 
 use crate::{
@@ -17,27 +14,29 @@ mod registry;
 mod textures;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            DefaultPlugins,
-            FramepacePlugin,
-            FrameTimeDiagnosticsPlugin::default(),
-            // LogDiagnosticsPlugin::default(),
-        ))
-        .init_resource::<DynamicTextureAtlas>()
-        .add_systems(Startup, (Registries::init_sys, setup).chain())
-        .add_systems(Update, (Registries::update_sys, spectator_controls))
-        .run();
+    let mut app = App::new();
+    app.add_plugins((
+        DefaultPlugins,
+        FramepacePlugin,
+        FrameTimeDiagnosticsPlugin::default(),
+        #[cfg(feature = "log_frametime")]
+        LogDiagnosticsPlugin::default(),
+    ))
+    .init_resource::<DynamicTextureAtlas>()
+    .add_systems(Startup, (Registries::init_sys, setup).chain())
+    .add_systems(Update, (Registries::update_sys, spectator_controls));
+    app.run();
 }
 fn setup(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     channels: Res<LoaderChannels>,
-    mut window: Query<&mut Window>,
+    #[cfg(feature = "log_frametime")] mut window: Query<&mut Window>,
 ) {
-    let mut window = window.single_mut().unwrap();
-    window.present_mode = PresentMode::AutoNoVsync;
+    #[cfg(feature = "log_frametime")]
+    {
+        let mut window = window.single_mut().unwrap();
+        window.present_mode = PresentMode::AutoNoVsync;
+    }
 
     println!("Chunk size: {}", size_of::<Chunk>());
 
