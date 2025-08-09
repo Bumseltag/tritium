@@ -25,6 +25,5 @@ opt-level = 1
 opt-level = 3
 
 [features]
-default = ["trace"]
 trace = ["bevy/trace_tracy"]
 log_frametime = []
