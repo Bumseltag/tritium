@@ -1,4 +1,4 @@
-use std::{fs, future::poll_fn, path::PathBuf, str::FromStr, task::Poll};
+use std::{any::type_name, fs, future::poll_fn, path::PathBuf, str::FromStr, task::Poll};
 
 use async_channel::{Receiver, Sender};
 use bevy::{
@@ -20,9 +20,10 @@ use image::{DynamicImage, RgbaImage};
 use mcpackloader::{
     ResourceLocation, ResourceParseError, ResourceType, blockstates::BlockstateFile,
 };
-use tracing::info_span;
+use tracing::{error, info_span};
 
 use crate::{
+    RegistryStatus,
     chunk::{Chunk, CulledChunk, LoadedBlockModel},
     textures::{ATLAS_SIZE, DynamicTextureAtlas, LoadedTexture},
 };
@@ -76,36 +77,14 @@ impl Registries {
                             let culled_chunk = CulledChunk::new(chunk);
                             let chunk_mesh = culled_chunk.to_mesh().unwrap().to_bevy_mesh();
                             reg.from_loader_send
-                                .send(FromLoader::LoadedChunk(pos, chunk_mesh))
+                                .send(FromLoader::LoadedChunk(
+                                    pos,
+                                    chunk_mesh,
+                                    reg.get_total_status(),
+                                ))
                                 .await
                                 .unwrap();
-                        } //     ToLoader::LoadBlockModel(model) => {
-                          //         let res: LoadedBlockModel = reg
-                          //             .get_or_load::<LoadedBlockModel>(&model)
-                          //             .await
-                          //             .unwrap()
-                          //             .clone();
-                          //         let mesh = res
-                          //             .mesh
-                          //             .unwrap()
-                          //             .to_mesh(
-                          //                 HashSet::from_iter(vec![
-                          //                     Direction::Down,
-                          //                     Direction::Up,
-                          //                     Direction::North,
-                          //                     Direction::South,
-                          //                     Direction::East,
-                          //                     Direction::West,
-                          //                 ]),
-                          //                 &res.textures,
-                          //                 &reg,
-                          //             )
-                          //             .unwrap();
-                          //         reg.from_loader_send
-                          //             .send(FromLoader::LoadedBlockModel(model, Box::new(mesh)))
-                          //             .await
-                          //             .unwrap();
-                          //     }
+                        }
                     }
                 }
             })
@@ -119,28 +98,30 @@ impl Registries {
         mut layouts: ResMut<Assets<TextureAtlasLayout>>,
         mut images: ResMut<Assets<Image>>,
         mut meshes: ResMut<Assets<Mesh>>,
+        mut status_res: ResMut<RegistryStatus>,
     ) {
         while let Ok(msg) = channels.from_loader.try_recv() {
             match msg {
-                FromLoader::LoadedChunk(pos, mesh) => {
-                    let _ = info_span!("LoadedChunk").entered();
-                    images
-                        .get(&atlas.atlas)
-                        .unwrap()
-                        .clone()
-                        .try_into_dynamic()
-                        .unwrap()
-                        .save("atlas.png")
-                        .unwrap();
+                FromLoader::LoadedChunk(pos, mesh, status) => {
+                    let _span = info_span!("LoadedChunk").entered();
+                    // images
+                    //     .get(&atlas.atlas)
+                    //     .unwrap()
+                    //     .clone()
+                    //     .try_into_dynamic()
+                    //     .unwrap()
+                    //     .save("atlas.png")
+                    //     .unwrap();
                     commands.spawn((
                         Mesh3d(meshes.add(mesh)),
                         MeshMaterial3d(atlas.material.clone()),
                         Transform::from_xyz(pos.x as f32 * 16.0, -64.0, pos.y as f32 * 16.0),
                         // Transform::from_xyz(0.0, -64.0, 0.0),
                     ));
+                    status_res.0 = status;
                 }
                 FromLoader::LoadTextureIntoAtlas(texture) => {
-                    let _ = info_span!("LoadTextureIntoAtlas").entered();
+                    let _span = info_span!("LoadTextureIntoAtlas").entered();
                     let image = Image::from_dynamic(
                         DynamicImage::from(*texture),
                         true,
@@ -210,6 +191,17 @@ impl Registries {
     ) -> Result<&'a L, &'a ResourceParseError> {
         Box::pin(Registry::get_or_load(self, res_loc)).await
     }
+
+    pub fn get_total_status(&self) -> Status {
+        let textures = self.textures.get_status();
+        let blockstates = self.blockstates.get_status();
+        let models = self.models.get_status();
+        Status {
+            ok: textures.ok + blockstates.ok + models.ok,
+            errs: textures.errs + blockstates.errs + models.errs,
+            loading: textures.loading + blockstates.loading + models.loading,
+        }
+    }
 }
 
 pub struct Registry<L: LoadedResource> {
@@ -266,9 +258,27 @@ impl<L: LoadedResource> Registry<L> {
     {
         registries
             .get_or_insert_with(res_loc, async |registries| {
-                Self::load(registries, res_loc).await
+                let res = Self::load(registries, res_loc).await;
+                if let Err(err) = &res {
+                    error!(
+                        "Failed to load resource type {}: {}.\nError: {}",
+                        type_name::<L::Resource>(),
+                        res_loc,
+                        err
+                    );
+                }
+                res
             })
             .await
+    }
+
+    pub fn get_status(&self) -> Status {
+        let ok = self.loaded.iter().filter(|v| v.1.is_ok()).count();
+        Status {
+            ok,
+            errs: self.loaded.len() - ok,
+            loading: self.loading.len(),
+        }
     }
 }
 
@@ -277,7 +287,7 @@ pub enum ToLoader {
 }
 
 pub enum FromLoader {
-    LoadedChunk(IVec2, Mesh),
+    LoadedChunk(IVec2, Mesh, Status),
     LoadTextureIntoAtlas(Box<RgbaImage>),
 }
 
@@ -288,9 +298,9 @@ pub struct LoaderChannels {
 }
 
 pub struct Status {
-    ok: usize,
-    errs: usize,
-    loading: usize,
+    pub ok: usize,
+    pub errs: usize,
+    pub loading: usize,
 }
 
 pub trait LoadedResource: Sized {

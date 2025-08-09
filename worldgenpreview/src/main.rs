@@ -1,11 +1,16 @@
-use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, input::mouse::MouseMotion, prelude::*};
-#[cfg(feature = "log_frametime")]
-use bevy::{diagnostic::LogDiagnosticsPlugin, window::PresentMode};
-use bevy_framepace::FramepacePlugin;
+use std::time::Duration;
+
+use bevy::window::{PresentMode, WindowResolution, WindowTheme};
+use bevy::{
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    input::mouse::MouseMotion,
+    prelude::*,
+};
+use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
 use crate::{
     chunk::Chunk,
-    registry::{LoaderChannels, Registries, ToLoader},
+    registry::{LoaderChannels, Registries, Status, ToLoader},
     textures::DynamicTextureAtlas,
 };
 
@@ -16,28 +21,37 @@ mod textures;
 fn main() {
     let mut app = App::new();
     app.add_plugins((
-        DefaultPlugins,
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "worldgenpreview".into(),
+                window_theme: Some(WindowTheme::Dark),
+                resolution: WindowResolution::new(1500.0, 800.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
         FramepacePlugin,
         FrameTimeDiagnosticsPlugin::default(),
-        #[cfg(feature = "log_frametime")]
-        LogDiagnosticsPlugin::default(),
     ))
     .init_resource::<DynamicTextureAtlas>()
+    .init_resource::<UpdateStatsTimer>()
+    .init_resource::<VSyncMode>()
+    .init_resource::<RegistryStatus>()
     .add_systems(Startup, (Registries::init_sys, setup).chain())
-    .add_systems(Update, (Registries::update_sys, spectator_controls));
+    .add_systems(Startup, setup_stats)
+    .add_systems(
+        Update,
+        (
+            Registries::update_sys,
+            spectator_controls,
+            misc_controls,
+            update_stats,
+        ),
+    );
     app.run();
 }
-fn setup(
-    mut commands: Commands,
-    channels: Res<LoaderChannels>,
-    #[cfg(feature = "log_frametime")] mut window: Query<&mut Window>,
-) {
-    #[cfg(feature = "log_frametime")]
-    {
-        let mut window = window.single_mut().unwrap();
-        window.present_mode = PresentMode::AutoNoVsync;
-    }
 
+fn setup(mut commands: Commands, channels: Res<LoaderChannels>) {
     println!("Chunk size: {}", size_of::<Chunk>());
 
     commands.spawn((
@@ -128,8 +142,211 @@ fn spectator_controls(
         direction -= up;
     }
 
+    let mut move_speed = 20.0;
+    if keys.pressed(KeyCode::ControlLeft) {
+        move_speed *= 5.0;
+    }
+    if keys.pressed(KeyCode::AltLeft) {
+        move_speed *= 5.0;
+    }
+
     if direction.length_squared() > 0.0 {
         direction = direction.normalize();
-        transform.translation += direction * 10.0 * time.delta_secs();
+        transform.translation += direction * move_speed * time.delta_secs();
+    }
+}
+
+fn misc_controls(
+    mut windows: Query<&mut Window>,
+    mut vsync_enabled: ResMut<VSyncMode>,
+    mut framepace: ResMut<FramepaceSettings>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    let mut window = windows.single_mut().unwrap();
+    if keys.just_pressed(KeyCode::KeyV) {
+        if vsync_enabled.0 {
+            window.present_mode = PresentMode::AutoNoVsync;
+            framepace.limiter = bevy_framepace::Limiter::Off;
+        } else {
+            window.present_mode = PresentMode::AutoVsync;
+            framepace.limiter = bevy_framepace::Limiter::Auto;
+        }
+        vsync_enabled.0 = !vsync_enabled.0;
+    }
+}
+
+fn setup_stats(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(0.0),
+            left: Val::Px(0.0),
+            right: Val::Px(0.0),
+            height: Val::Px(30.0),
+            padding: UiRect::horizontal(Val::Px(20.0)),
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            ..Default::default()
+        },
+        BackgroundColor(Color::srgba_u8(0, 0, 0, 200)),
+        children![(
+            Text::new("Uses spectator controls | [RMB] Pan Camera | [Ctrl] move fast | [Ctrl+Alt] move super fast | [V] toggle VSync"),
+            stats_font(&asset_server),
+            TextColor(Color::srgb_u8(200, 200, 200)),
+        )],
+    ));
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(0.0),
+            left: Val::Px(0.0),
+            right: Val::Px(0.0),
+            padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
+            ..Default::default()
+        },
+        BackgroundColor(Color::srgba_u8(0, 0, 0, 200)),
+        children![(
+            Text::new("FPS: "),
+            stats_font(&asset_server),
+            TextColor(Color::srgb_u8(200, 200, 200)),
+            children![
+                (
+                    TextSpan::new("---.-"),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(168, 255, 148)),
+                    DynText("fps"),
+                ),
+                (
+                    TextSpan::new("             | "),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(150, 150, 150)),
+                    DynText("vsync"),
+                ),
+                (
+                    TextSpan::new("Memory: "),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(200, 200, 200)),
+                ),
+                (
+                    TextSpan::new("----.-"),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(148, 191, 255)),
+                    DynText("memory")
+                ),
+                (
+                    TextSpan::new(" MB | "),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(150, 150, 150))
+                ),
+                (
+                    TextSpan::new("Resources: "),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(200, 200, 200)),
+                ),
+                (
+                    TextSpan::new("--- Ok "),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(168, 255, 148)),
+                    DynText("resources/ok")
+                ),
+                (
+                    TextSpan::new("--- Err "),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(255, 152, 148)),
+                    DynText("resources/err")
+                ),
+                (
+                    TextSpan::new("--- Ldg "),
+                    stats_font(&asset_server),
+                    TextColor(Color::srgb_u8(150, 150, 150)),
+                    DynText("resources/ldg")
+                ),
+            ]
+        )],
+    ));
+}
+
+#[derive(Component)]
+pub struct DynText(&'static str);
+
+#[derive(Resource)]
+pub struct UpdateStatsTimer(Timer);
+
+impl Default for UpdateStatsTimer {
+    fn default() -> Self {
+        Self(Timer::new(Duration::from_secs(1), TimerMode::Repeating))
+    }
+}
+
+#[derive(Resource)]
+pub struct VSyncMode(bool);
+
+impl Default for VSyncMode {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+#[derive(Resource)]
+pub struct RegistryStatus(Status);
+
+impl Default for RegistryStatus {
+    fn default() -> Self {
+        Self(Status {
+            ok: 0,
+            errs: 0,
+            loading: 0,
+        })
+    }
+}
+
+fn update_stats(
+    diagnostics: Res<DiagnosticsStore>,
+    mut dyn_text: Query<(&mut TextSpan, &DynText)>,
+    mut timer: ResMut<UpdateStatsTimer>,
+    status_res: Res<RegistryStatus>,
+    vsync_enabled: Res<VSyncMode>,
+    time: Res<Time>,
+) {
+    timer.0.tick(time.delta());
+    for (mut text, id) in &mut dyn_text {
+        match (id.0, timer.0.just_finished()) {
+            ("fps", true) => {
+                if let Some(fps) = diagnostics
+                    .get(&FrameTimeDiagnosticsPlugin::FPS)
+                    .and_then(|v| v.smoothed())
+                {
+                    **text = format!("{fps:>5.1}");
+                } else {
+                    **text = "---.-".into();
+                }
+            }
+            ("vsync", _) => {
+                **text = if vsync_enabled.0 {
+                    " (VSync on)  | ".into()
+                } else {
+                    " (VSync off) | ".into()
+                };
+            }
+            ("memory", true) => {
+                if let Some(memory_stats) = memory_stats::memory_stats() {
+                    **text = format!("{:>7.1}", memory_stats.virtual_mem as f32 / 1024.0 / 1024.0);
+                } else {
+                    **text = "----.-".into();
+                }
+            }
+            ("resources/ok", _) => **text = format!("{:>3} Ok ", status_res.0.ok),
+            ("resources/err", _) => **text = format!("{:>3} Err ", status_res.0.errs),
+            ("resources/ldg", _) => **text = format!("{:>3} Ldg ", status_res.0.loading),
+            _ => {}
+        }
+    }
+}
+
+fn stats_font(asset_server: &AssetServer) -> TextFont {
+    TextFont {
+        font: asset_server.load("JetBrainsMono-Regular.ttf"),
+        font_size: 20.0,
+        ..Default::default()
     }
 }
