@@ -28,3 +28,15 @@ This repo requires no special setup for Rust. If you haven't installed it yet, d
 The sub-projects in the repo support profiling with Tracy.
 
 To begin profiling, install [Tracy 0.12.2](https://github.com/wolfpld/tracy/releases/tag/v0.12.2). Run `tracy-capture.exe -fo log.tracy`, then start the application to be profiled, once done, close the application and `tracy-capture` will stop automatically. Now you can open the created `log.tracy` file with `tracy-profiler.exe`.
+
+You must also enable the `tracy` feature flag for the relevant app by building / running it with (using release mode is also recommended):
+
+```sh
+cargo build --release -F tracy
+```
+
+or
+
+```
+cargo run --release -F tracy
+```
