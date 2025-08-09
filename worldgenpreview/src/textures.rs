@@ -95,7 +95,7 @@ impl FromWorld for DynamicTextureAtlas {
             base_color: Color::WHITE,
             base_color_texture: Some(atlas.clone()),
             reflectance: 0.0,
-            alpha_mode: AlphaMode::AlphaToCoverage,
+            alpha_mode: AlphaMode::Mask(0.5),
             ..Default::default()
         });
         Self {
