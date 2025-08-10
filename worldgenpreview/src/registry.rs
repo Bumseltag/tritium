@@ -6,7 +6,7 @@ use std::path::Path;
 use std::{any::type_name, env, fs, future::poll_fn, path::PathBuf, str::FromStr, task::Poll};
 
 use async_channel::{Receiver, Sender};
-use bevy::platform::hash::{DefaultHasher, FixedHasher};
+use bevy::platform::hash::FixedHasher;
 use bevy::prelude::*;
 use bevy::{
     asset::{Assets, RenderAssetUsages},
