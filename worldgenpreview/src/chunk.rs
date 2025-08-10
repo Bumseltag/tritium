@@ -54,14 +54,23 @@ impl Chunk {
     pub async fn example_chunk(registries: &mut Registries) -> Self {
         let mut palette = [const { Self::air() }; u8::MAX as usize];
         let stone = Block::new_with_state(ResourceLocation::new_mc("stone"), vec![]);
-        palette[1] = stone.into_palette_format(registries).await.unwrap();
+        palette[1] = stone
+            .into_palette_format(registries)
+            .await
+            .unwrap_or(Self::air());
         let dirt = Block::new_with_state(ResourceLocation::new_mc("dirt"), vec![]);
-        palette[2] = dirt.into_palette_format(registries).await.unwrap();
+        palette[2] = dirt
+            .into_palette_format(registries)
+            .await
+            .unwrap_or(Self::air());
         let grass_block = Block::new_with_state(
             ResourceLocation::new_mc("grass_block"),
             vec![("snowy".into(), Property::Bool(false))],
         );
-        palette[3] = grass_block.into_palette_format(registries).await.unwrap();
+        palette[3] = grass_block
+            .into_palette_format(registries)
+            .await
+            .unwrap_or(Self::air());
 
         let mut data = [0; BLOCKS_PER_CHUNK];
         for y in 0..121 {
@@ -76,9 +85,15 @@ impl Chunk {
             ResourceLocation::new_mc("oak_log"),
             vec![("axis".into(), Property::Enum("y".into()))],
         );
-        palette[4] = oak_log.into_palette_format(registries).await.unwrap();
+        palette[4] = oak_log
+            .into_palette_format(registries)
+            .await
+            .unwrap_or(Self::air());
         let oak_leaves = Block::new_with_state(ResourceLocation::new_mc("oak_leaves"), vec![]);
-        palette[5] = oak_leaves.into_palette_format(registries).await.unwrap();
+        palette[5] = oak_leaves
+            .into_palette_format(registries)
+            .await
+            .unwrap_or(Self::air());
         for y in 128..130 {
             for x in 6..11 {
                 for z in 6..11 {

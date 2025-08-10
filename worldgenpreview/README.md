@@ -2,13 +2,11 @@
 
 Worldgenpreview is a small front-end for libworldgen written using the [Bevy Engine](https://bevy.org/).
 
-Run it with
+To run it, you must add at least 1 resource pack. This should most likely be the `client.jar` of the version you are using (download it from [the wiki](https://minecraft.wiki/w/1.21)).
+You can also add your own resource packs (directories or zip files), and mods.
 
 ```sh
-cargo run -- --resources path/to/minecraft/jar
+cargo run -- path/to/my/resourcepack path/to/client.jar
 ```
 
-> [!NOTE]
-> `--resources` is not yet supported (issue [#6](https://github.com/Bumseltag/tritium/issues/6)). The following is how it's gonna look like once completed.
-
-If you pass in a .jar file into `--resources`, it will extract that file into `./resources`. After the first time you run it, you will no longer have to specify `--resources`, as it will default to that folder.
+Note that ordering is important. Earlier resource packs will override later resource packs. That means that you will have to put your `client.jar` last.

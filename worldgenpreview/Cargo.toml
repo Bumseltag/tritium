@@ -16,6 +16,7 @@ mcpackloader = { path = "../mcpackloader", default-features = false, features = 
 ] }
 memory-stats = "1.2.0"
 tracing = "0.1.41"
+zip = "4.3.0"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

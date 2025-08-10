@@ -1,6 +1,13 @@
-use std::{any::type_name, fs, future::poll_fn, path::PathBuf, str::FromStr, task::Poll};
+use std::ffi::OsStr;
+use std::fs::File;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::io;
+use std::path::Path;
+use std::{any::type_name, env, fs, future::poll_fn, path::PathBuf, str::FromStr, task::Poll};
 
 use async_channel::{Receiver, Sender};
+use bevy::platform::hash::{DefaultHasher, FixedHasher};
+use bevy::prelude::*;
 use bevy::{
     asset::{Assets, RenderAssetUsages},
     ecs::{
@@ -20,10 +27,11 @@ use image::{DynamicImage, RgbaImage};
 use mcpackloader::{
     ResourceLocation, ResourceParseError, ResourceType, blockstates::BlockstateFile,
 };
-use tracing::{error, info_span};
+use tracing::{error, info_span, instrument};
+use zip::ZipArchive;
 
 use crate::{
-    RegistryStatus,
+    AppState, RegistryStatus,
     chunk::{Chunk, CulledChunk, LoadedBlockModel},
     textures::{ATLAS_SIZE, DynamicTextureAtlas, LoadedTexture},
 };
@@ -35,6 +43,7 @@ pub struct Registries {
     pub to_loader_recv: Receiver<ToLoader>,
     pub from_loader_send: Sender<FromLoader>,
     packs: Vec<PathBuf>,
+    archives: HashMap<String, ZipArchive<File>>,
 }
 
 impl Registries {
@@ -51,10 +60,45 @@ impl Registries {
             to_loader_recv,
             from_loader_send,
             packs,
+            archives: HashMap::new(),
         }
     }
 
-    pub fn init_sys(mut commands: Commands) {
+    pub fn init_sys(
+        mut commands: Commands,
+        mut next_state: ResMut<NextState<AppState>>,
+        asset_server: Res<AssetServer>,
+    ) {
+        let packs = get_packs();
+
+        if let Err(err) = packs {
+            error!("Unable to load resource packs: {}", err);
+            commands.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(0.0),
+                    bottom: Val::Px(0.0),
+                    left: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    display: Display::Grid,
+                    justify_items: JustifyItems::Center,
+                    align_items: AlignItems::Center,
+                    ..Default::default()
+                },
+                children![(
+                    Text::new("Unable to load resource packs.\nSee logs for more info."),
+                    TextColor(Color::srgb_u8(255, 152, 148)),
+                    TextFont {
+                        font: asset_server.load("JetBrainsMono-Regular.ttf"),
+                        font_size: 40.0,
+                        ..Default::default()
+                    }
+                )],
+            ));
+            return;
+        }
+        let packs = packs.unwrap();
+
         let (to_loader_send, to_loader_recv) = async_channel::unbounded();
         let (from_loader_send, from_loader_recv) = async_channel::unbounded();
         commands.insert_resource(LoaderChannels {
@@ -64,11 +108,7 @@ impl Registries {
 
         AsyncComputeTaskPool::get()
             .spawn(async move {
-                let mut reg = Registries::new(
-                    vec![PathBuf::from_str("../datapacks/minecraft").unwrap()],
-                    to_loader_recv,
-                    from_loader_send,
-                );
+                let mut reg = Registries::new(packs, to_loader_recv, from_loader_send);
 
                 while let Ok(msg) = reg.to_loader_recv.recv().await {
                     match msg {
@@ -89,6 +129,8 @@ impl Registries {
                 }
             })
             .detach();
+
+        next_state.set(AppState::Main);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -210,6 +252,66 @@ impl Registries {
     }
 }
 
+fn get_packs() -> Result<Vec<PathBuf>, ResourceParseError> {
+    let mut paths = vec![];
+
+    for path in env::args().skip(1) {
+        let path_buf = PathBuf::from_str(&path).expect("infallible");
+        if let Some(ext) = path_buf.extension() {
+            if !(ext == OsStr::new("zip") || ext == OsStr::new("jar")) {
+                return Err(
+                    "Unsupported resource pack type. Expected `.zip`, `.jar` or a plain directory"
+                        .into(),
+                );
+            }
+        }
+
+        paths.push(path_buf);
+    }
+
+    if paths.is_empty() {
+        Err("No resource packs added. See README.md".into())
+    } else {
+        Ok(paths)
+    }
+}
+
+/// Extracts a single file from a zip archive to some opaque location.
+/// Returns the file path of the extracted file, if it exists.
+#[instrument(skip_all)]
+fn extract_file(
+    archive_path: &Path,
+    file_path: &Path,
+    archives: &mut HashMap<String, ZipArchive<File>>,
+) -> Option<PathBuf> {
+    let archive = archives
+        .entry(archive_path.to_str().unwrap().to_string())
+        .or_insert_with(|| {
+            let zipfile = std::fs::File::open(archive_path).unwrap();
+            zip::ZipArchive::new(zipfile).unwrap()
+        });
+    let mut file = archive
+        .by_name(&file_path.to_str().unwrap().replace('\\', "/"))
+        .ok()?;
+
+    let mut outpath = PathBuf::new();
+    outpath.push("worldgenpreview_cache");
+    let mut fhash = FixedHasher.build_hasher();
+    archive_path.hash(&mut fhash);
+    file_path.hash(&mut fhash);
+    outpath.push(format!("{:x}", fhash.finish()));
+
+    if let Some(p) = outpath.parent() {
+        if !p.exists() {
+            fs::create_dir_all(p).unwrap();
+        }
+    }
+    let mut outfile = fs::File::create(&outpath).unwrap();
+    io::copy(&mut file, &mut outfile).unwrap();
+
+    Some(outpath)
+}
+
 pub struct Registry<L: LoadedResource> {
     loaded: HashMap<ResourceLocation<L::Resource>, Result<L, ResourceParseError>>,
     loading: HashSet<ResourceLocation<L::Resource>>,
@@ -227,17 +329,30 @@ impl<L: LoadedResource> Registry<L> {
         registries: &mut Registries,
         res_loc: &ResourceLocation<L::Resource>,
     ) -> Result<L, ResourceParseError> {
-        let mut model = None;
+        let mut resource = None;
         for pack in &registries.packs {
+            if let Some(ext) = pack.extension() {
+                if ext == OsStr::new("zip") || ext == OsStr::new("jar") {
+                    let path = extract_file(
+                        pack,
+                        &L::Resource::to_path(res_loc),
+                        &mut registries.archives,
+                    );
+                    if let Some(path) = path {
+                        resource = Some(L::Resource::open(path)?);
+                        break;
+                    }
+                }
+            }
             let mut path = pack.clone();
             path.push(L::Resource::to_path(res_loc));
             if fs::exists(&path)? {
-                model = Some(L::Resource::open(path)?);
+                resource = Some(L::Resource::open(path)?);
                 break;
             }
         }
 
-        if let Some(model) = model {
+        if let Some(model) = resource {
             L::load(res_loc, model, registries).await
         } else {
             Err(ResourceParseError::ResourceNotFound(
