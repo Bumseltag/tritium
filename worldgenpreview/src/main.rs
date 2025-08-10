@@ -2,6 +2,7 @@ use std::fs;
 use std::time::Duration;
 
 use bevy::ecs::system::SystemId;
+use bevy::platform::collections::HashSet;
 use bevy::window::{PresentMode, WindowResolution, WindowTheme};
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -10,7 +11,7 @@ use bevy::{
 };
 use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
-use crate::registry::{ChunkTask, LoaderChannels, RegistriesHandle};
+use crate::registry::{ChunkPos, ChunkTask, LoaderChannels, RegistriesHandle};
 use crate::{chunk::Chunk, textures::DynamicTextureAtlas};
 
 mod chunk;
@@ -38,7 +39,7 @@ fn main() {
     .init_state::<AppState>()
     .add_systems(Startup, (setup_scene, setup_stats))
     .add_systems(OnEnter(AppState::Loading), ChunkTask::init_sys)
-    .add_systems(OnEnter(AppState::Main), spawn_example_chunks)
+    // .add_systems(OnEnter(AppState::Main), spawn_example_chunks)
     .add_systems(
         Update,
         (
@@ -47,6 +48,7 @@ fn main() {
             spectator_controls,
             misc_controls,
             update_stats,
+            generate_chunks_around_camera,
         )
             .run_if(in_state(AppState::Main)),
     );
@@ -112,13 +114,45 @@ fn reload(
     }
 }
 
-fn spawn_example_chunks(mut commands: Commands, registries: Res<RegistriesHandle>) {
-    let registries = registries.clone();
-    commands.spawn_batch((0..24 * 24).map(move |i| {
-        let x = i % 24;
-        let z = i / 24;
-        ChunkTask::create(IVec2::new(x, z), registries.clone())
-    }));
+const RENDER_DISTANCE: i32 = 24;
+const HALF_RENDER_DISTANCE: i32 = RENDER_DISTANCE / 2;
+
+fn generate_chunks_around_camera(
+    mut commands: Commands,
+    cam: Query<&Transform, With<Camera3d>>,
+    mut chunks: Query<(Entity, &ChunkPos, Option<&mut ChunkTask>)>,
+    registries: Res<RegistriesHandle>,
+) {
+    let cam_pos = cam.single().unwrap().translation;
+    let cam_chunk = (cam_pos / 16.0).xz().as_ivec2();
+    let mut generated_chunks = HashSet::new();
+    for (entity, pos, task) in &mut chunks {
+        if pos.0.distance_squared(cam_chunk) > HALF_RENDER_DISTANCE.pow(2) {
+            if let Some(mut task) = task {
+                task.cancel();
+            } else {
+                commands.entity(entity).despawn();
+            }
+        } else {
+            generated_chunks.insert(pos.0);
+        }
+    }
+    let chunks_to_generate = (0..RENDER_DISTANCE * RENDER_DISTANCE).flat_map(|i| {
+        let x = (i % RENDER_DISTANCE) - HALF_RENDER_DISTANCE + 1;
+        let z = (i / RENDER_DISTANCE) - HALF_RENDER_DISTANCE + 1;
+        let pos = IVec2::new(x, z) + cam_chunk;
+        if pos.distance_squared(cam_chunk) <= HALF_RENDER_DISTANCE.pow(2)
+            && !generated_chunks.contains(&pos)
+        {
+            Some(pos)
+        } else {
+            None
+        }
+    });
+
+    for pos in chunks_to_generate {
+        commands.spawn((ChunkTask::create(registries.clone()), ChunkPos(pos)));
+    }
 }
 
 fn spectator_controls(
@@ -231,79 +265,59 @@ fn setup_stats(mut commands: Commands, asset_server: Res<AssetServer>) {
             TextColor(Color::srgb_u8(200, 200, 200)),
         )],
     ));
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(0.0),
-            left: Val::Px(0.0),
-            right: Val::Px(0.0),
-            padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
-            ..Default::default()
-        },
-        BackgroundColor(Color::srgba_u8(0, 0, 0, 200)),
-        children![(
+
+    let text_spans = [
+        ("", 168, 255, 148, "fps"),
+        ("", 150, 150, 150, "vsync"),
+        ("Memory: ", 200, 200, 200, ""),
+        ("", 148, 191, 255, "memory"),
+        (" MB | ", 150, 150, 150, ""),
+        ("Resources: ", 200, 200, 200, ""),
+        ("", 168, 255, 148, "resources/ok"),
+        ("", 255, 152, 148, "resources/err"),
+        ("", 150, 150, 150, "resources/ldg"),
+        ("| Generating: ", 200, 200, 200, ""),
+        ("", 246, 255, 148, "chunks"),
+        (" Chunks", 150, 150, 150, ""),
+    ];
+    let mut built_text_spans = Vec::new();
+    for (text, r, g, b, id) in text_spans {
+        let entity = commands
+            .spawn((
+                TextSpan::new(text),
+                TextColor(Color::srgb_u8(r, g, b)),
+                TextId(id),
+            ))
+            .id();
+        built_text_spans.push(entity);
+    }
+
+    let text = commands
+        .spawn((
             Text::new("FPS: "),
             stats_font(&asset_server),
             TextColor(Color::srgb_u8(200, 200, 200)),
-            children![
-                (
-                    TextSpan::new("---.-"),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(168, 255, 148)),
-                    DynText("fps"),
-                ),
-                (
-                    TextSpan::new("             | "),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(150, 150, 150)),
-                    DynText("vsync"),
-                ),
-                (
-                    TextSpan::new("Memory: "),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(200, 200, 200)),
-                ),
-                (
-                    TextSpan::new("----.-"),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(148, 191, 255)),
-                    DynText("memory")
-                ),
-                (
-                    TextSpan::new(" MB | "),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(150, 150, 150))
-                ),
-                (
-                    TextSpan::new("Resources: "),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(200, 200, 200)),
-                ),
-                (
-                    TextSpan::new("--- Ok "),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(168, 255, 148)),
-                    DynText("resources/ok")
-                ),
-                (
-                    TextSpan::new("--- Err "),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(255, 152, 148)),
-                    DynText("resources/err")
-                ),
-                (
-                    TextSpan::new("--- Ldg "),
-                    stats_font(&asset_server),
-                    TextColor(Color::srgb_u8(150, 150, 150)),
-                    DynText("resources/ldg")
-                ),
-            ]
-        )],
-    ));
+        ))
+        .add_children(&built_text_spans)
+        .id();
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
+                ..Default::default()
+            },
+            BackgroundColor(Color::srgba_u8(0, 0, 0, 200)),
+        ))
+        .add_child(text);
 }
 
 #[derive(Component)]
-pub struct DynText(&'static str);
+pub struct TextId(&'static str);
 
 #[derive(Resource)]
 pub struct UpdateStatsTimer(Timer);
@@ -325,11 +339,12 @@ impl Default for VSyncMode {
 
 fn update_stats(
     diagnostics: Res<DiagnosticsStore>,
-    mut dyn_text: Query<(&mut TextSpan, &DynText)>,
+    mut dyn_text: Query<(&mut TextSpan, &TextId)>,
     mut timer: ResMut<UpdateStatsTimer>,
     registries: Res<RegistriesHandle>,
     vsync_enabled: Res<VSyncMode>,
     time: Res<Time>,
+    chunks: Query<(), With<ChunkTask>>,
 ) {
     timer.0.tick(time.delta());
     let status = registries.lock_blocking().get_total_status();
@@ -362,6 +377,7 @@ fn update_stats(
             ("resources/ok", _) => **text = format!("{:>3} Ok ", status.ok),
             ("resources/err", _) => **text = format!("{:>3} Err ", status.errs),
             ("resources/ldg", _) => **text = format!("{:>3} Ldg ", status.loading),
+            ("chunks", _) => **text = format!("{:>3}", chunks.iter().count()),
             _ => {}
         }
     }

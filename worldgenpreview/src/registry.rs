@@ -53,14 +53,16 @@ impl RegistriesHandle {
 }
 
 #[derive(Component)]
+pub struct ChunkPos(pub IVec2);
+
+#[derive(Component)]
 pub struct ChunkTask {
-    pos: IVec2,
     task: Option<Task<Mesh>>,
     cancelled: bool,
 }
 
 impl ChunkTask {
-    pub fn create(pos: IVec2, registries: RegistriesHandle) -> Self {
+    pub fn create(registries: RegistriesHandle) -> Self {
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let chunk = Box::new(Chunk::example_chunk(&mut *registries.lock().await).await);
             let culled_chunk = CulledChunk::new(chunk);
@@ -68,7 +70,6 @@ impl ChunkTask {
         });
 
         Self {
-            pos,
             task: Some(task),
             cancelled: false,
         }
@@ -82,20 +83,24 @@ impl ChunkTask {
         &mut self,
         self_entity: Entity,
         commands: &mut Commands,
+        pos: &IVec2,
         atlas: &mut ResMut<DynamicTextureAtlas>,
         meshes: &mut ResMut<Assets<Mesh>>,
     ) {
         if self.cancelled {
+            commands.entity(self_entity).despawn();
             return;
         }
         if self.task.as_ref().unwrap().is_finished() {
             let mesh = block_on(self.task.take().unwrap());
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(atlas.material.clone()),
-                Transform::from_xyz(self.pos.x as f32 * 16.0, -64.0, self.pos.y as f32 * 16.0),
-            ));
-            commands.entity(self_entity).despawn();
+            commands
+                .entity(self_entity)
+                .insert((
+                    Mesh3d(meshes.add(mesh)),
+                    MeshMaterial3d(atlas.material.clone()),
+                    Transform::from_xyz(pos.x as f32 * 16.0, -64.0, pos.y as f32 * 16.0),
+                ))
+                .remove::<ChunkTask>();
         }
     }
 
@@ -149,10 +154,10 @@ impl ChunkTask {
         mut commands: Commands,
         mut atlas: ResMut<DynamicTextureAtlas>,
         mut meshes: ResMut<Assets<Mesh>>,
-        mut query: Query<(Entity, &mut ChunkTask)>,
+        mut query: Query<(Entity, &mut ChunkTask, &ChunkPos)>,
     ) {
-        for (entity, mut task) in &mut query {
-            task.try_complete(entity, &mut commands, &mut atlas, &mut meshes);
+        for (entity, mut task, pos) in &mut query {
+            task.try_complete(entity, &mut commands, &pos.0, &mut atlas, &mut meshes);
         }
     }
 
