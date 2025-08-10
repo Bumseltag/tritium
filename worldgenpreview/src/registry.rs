@@ -167,7 +167,7 @@ impl ChunkTask {
                         .add(&image, layouts.as_mut(), images.as_mut())
                         .unwrap();
 
-                    // make bevy update canvas on the GPU
+                    // make bevy update texture on the GPU
                     materials.get_mut(&atlas.material);
                 }
             }
