@@ -9,7 +9,7 @@ use bevy::{
     },
     image::{Image, TextureAtlasLayout},
     math::IVec2,
-    pbr::MeshMaterial3d,
+    pbr::{MeshMaterial3d, StandardMaterial},
     platform::collections::{HashMap, HashSet},
     render::mesh::{Mesh, Mesh3d},
     tasks::AsyncComputeTaskPool,
@@ -91,6 +91,7 @@ impl Registries {
             .detach();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_sys(
         mut commands: Commands,
         channels: ResMut<LoaderChannels>,
@@ -99,6 +100,7 @@ impl Registries {
         mut images: ResMut<Assets<Image>>,
         mut meshes: ResMut<Assets<Mesh>>,
         mut status_res: ResMut<RegistryStatus>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
         while let Ok(msg) = channels.from_loader.try_recv() {
             match msg {
@@ -130,6 +132,10 @@ impl Registries {
                     atlas
                         .add(&image, layouts.as_mut(), images.as_mut())
                         .unwrap();
+
+                    // make bevy update canvas on the GPU
+                    materials.get_mut(&atlas.material);
+
                     // images
                     //     .get(&atlas.atlas)
                     //     .unwrap()
