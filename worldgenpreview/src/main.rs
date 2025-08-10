@@ -1,6 +1,7 @@
 use std::fs;
 use std::time::Duration;
 
+use bevy::ecs::system::SystemId;
 use bevy::window::{PresentMode, WindowResolution, WindowTheme};
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -9,7 +10,7 @@ use bevy::{
 };
 use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
-use crate::registry::{ChunkTask, RegistriesHandle};
+use crate::registry::{ChunkTask, LoaderChannels, RegistriesHandle};
 use crate::{chunk::Chunk, textures::DynamicTextureAtlas};
 
 mod chunk;
@@ -35,8 +36,9 @@ fn main() {
     .init_resource::<UpdateStatsTimer>()
     .init_resource::<VSyncMode>()
     .init_state::<AppState>()
-    .add_systems(Startup, (ChunkTask::init_sys, setup))
-    .add_systems(OnEnter(AppState::Main), (setup_stats, spawn_example_chunks))
+    .add_systems(Startup, (setup_scene, setup_stats))
+    .add_systems(OnEnter(AppState::Loading), ChunkTask::init_sys)
+    .add_systems(OnEnter(AppState::Main), spawn_example_chunks)
     .add_systems(
         Update,
         (
@@ -60,7 +62,7 @@ pub enum AppState {
     Main,
 }
 
-fn setup(mut commands: Commands) {
+fn setup_scene(mut commands: Commands) {
     info!("Chunk size: {}", size_of::<Chunk>());
 
     commands.spawn((
@@ -86,13 +88,35 @@ fn setup(mut commands: Commands) {
             0.0,
         )),
     ));
+
+    let reload_system = commands.register_system(reload);
+    commands.insert_resource(ReloadSystem(reload_system));
+}
+
+#[derive(Resource)]
+pub struct ReloadSystem(SystemId);
+
+fn reload(
+    mut commands: Commands,
+    mut state: ResMut<NextState<AppState>>,
+    mut chunk_tasks: Query<&mut ChunkTask>,
+) {
+    commands.remove_resource::<DynamicTextureAtlas>();
+    commands.remove_resource::<LoaderChannels>();
+    commands.remove_resource::<RegistriesHandle>();
+    commands.init_resource::<DynamicTextureAtlas>();
+    state.set(AppState::Loading);
+
+    for mut task in &mut chunk_tasks {
+        task.cancel();
+    }
 }
 
 fn spawn_example_chunks(mut commands: Commands, registries: Res<RegistriesHandle>) {
     let registries = registries.clone();
-    commands.spawn_batch((0..32 * 32).map(move |i| {
-        let x = i % 32;
-        let z = i / 32;
+    commands.spawn_batch((0..24 * 24).map(move |i| {
+        let x = i % 24;
+        let z = i / 24;
         ChunkTask::create(IVec2::new(x, z), registries.clone())
     }));
 }
@@ -166,10 +190,12 @@ fn spectator_controls(
 }
 
 fn misc_controls(
+    mut commands: Commands,
     mut windows: Query<&mut Window>,
     mut vsync_enabled: ResMut<VSyncMode>,
     mut framepace: ResMut<FramepaceSettings>,
     keys: Res<ButtonInput<KeyCode>>,
+    reload_system: Res<ReloadSystem>,
 ) {
     let mut window = windows.single_mut().unwrap();
     if keys.just_pressed(KeyCode::KeyV) {
@@ -182,24 +208,25 @@ fn misc_controls(
         }
         vsync_enabled.0 = !vsync_enabled.0;
     }
+    if keys.just_pressed(KeyCode::KeyR) {
+        commands.run_system(reload_system.0);
+    }
 }
 
 fn setup_stats(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
+            display: Display::Block,
             bottom: Val::Px(0.0),
             left: Val::Px(0.0),
             right: Val::Px(0.0),
-            height: Val::Px(30.0),
-            padding: UiRect::horizontal(Val::Px(20.0)),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
             ..Default::default()
         },
         BackgroundColor(Color::srgba_u8(0, 0, 0, 200)),
         children![(
-            Text::new("Uses spectator controls | [RMB] Pan Camera | [Ctrl] move fast | [Ctrl+Alt] move super fast | [V] toggle VSync"),
+            Text::new("Uses spectator controls | [RMB] Pan Camera | [Ctrl] move fast | [Ctrl+Alt] move super fast\n[V] toggle VSync | [R] reload resources"),
             stats_font(&asset_server),
             TextColor(Color::srgb_u8(200, 200, 200)),
         )],
