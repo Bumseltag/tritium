@@ -1,3 +1,4 @@
+use std::fs;
 use std::time::Duration;
 
 use bevy::window::{PresentMode, WindowResolution, WindowTheme};
@@ -37,8 +38,9 @@ fn main() {
     .init_resource::<UpdateStatsTimer>()
     .init_resource::<VSyncMode>()
     .init_resource::<RegistryStatus>()
-    .add_systems(Startup, (Registries::init_sys, setup).chain())
-    .add_systems(Startup, setup_stats)
+    .init_state::<AppState>()
+    .add_systems(Startup, (Registries::init_sys, setup))
+    .add_systems(OnEnter(AppState::Main), (setup_stats, spawn_example_chunks))
     .add_systems(
         Update,
         (
@@ -46,13 +48,23 @@ fn main() {
             spectator_controls,
             misc_controls,
             update_stats,
-        ),
+        )
+            .run_if(in_state(AppState::Main)),
     );
     app.run();
+
+    fs::remove_dir_all("worldgenpreview_cache").unwrap();
 }
 
-fn setup(mut commands: Commands, channels: Res<LoaderChannels>) {
-    println!("Chunk size: {}", size_of::<Chunk>());
+#[derive(States, Default, Debug, Hash, PartialEq, Eq, Clone)]
+pub enum AppState {
+    #[default]
+    Loading,
+    Main,
+}
+
+fn setup(mut commands: Commands) {
+    info!("Chunk size: {}", size_of::<Chunk>());
 
     commands.spawn((
         Camera3d::default(),
@@ -77,7 +89,9 @@ fn setup(mut commands: Commands, channels: Res<LoaderChannels>) {
             0.0,
         )),
     ));
+}
 
+fn spawn_example_chunks(channels: Res<LoaderChannels>) {
     for x in 0..16 {
         for z in 0..16 {
             channels
