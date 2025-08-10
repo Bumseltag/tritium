@@ -56,6 +56,7 @@ impl RegistriesHandle {
 pub struct ChunkTask {
     pos: IVec2,
     task: Option<Task<Mesh>>,
+    cancelled: bool,
 }
 
 impl ChunkTask {
@@ -69,7 +70,12 @@ impl ChunkTask {
         Self {
             pos,
             task: Some(task),
+            cancelled: false,
         }
+    }
+
+    pub fn cancel(&mut self) {
+        self.cancelled = true;
     }
 
     fn try_complete(
@@ -79,6 +85,9 @@ impl ChunkTask {
         atlas: &mut ResMut<DynamicTextureAtlas>,
         meshes: &mut ResMut<Assets<Mesh>>,
     ) {
+        if self.cancelled {
+            return;
+        }
         if self.task.as_ref().unwrap().is_finished() {
             let mesh = block_on(self.task.take().unwrap());
             commands.spawn((
