@@ -40,7 +40,15 @@ pub struct Chunk {
     data: [BlockId; BLOCKS_PER_CHUNK],
 }
 
-pub static AIR: &(Block, LoadedBlock) = &Chunk::air();
+pub static FULL_BLOCK: &(Block, LoadedBlock) = &(
+    Block::new(ResourceLocation::air(), Blockstate(HashMap::new())),
+    LoadedBlock {
+        mesh: CullableMeshSet::new(),
+        full_block: true,
+        never_culled: false,
+        empty: false,
+    },
+);
 
 impl Chunk {
     pub const fn air() -> (Block, LoadedBlock) {
@@ -123,12 +131,12 @@ impl Chunk {
         &self.palette[palette_id as usize]
     }
 
-    pub fn index_or_air(&self, at: &I16Vec3) -> &(Block, LoadedBlock) {
+    pub fn index_or_full_block(&self, at: &I16Vec3) -> &(Block, LoadedBlock) {
         if !(0..16).contains(&at.x)
             || !(0..CHUNK_HEIGHT as i16).contains(&at.y)
             || !(0..16).contains(&at.z)
         {
-            return AIR;
+            return FULL_BLOCK;
         }
         let palette_id =
             self.data[at.x as usize + (16 * at.z as usize) + (const { 16 * 16 } * at.y as usize)];
@@ -273,27 +281,27 @@ impl CulledChunk {
     fn gen_block_culling_data(chunk: &Chunk, block: &I16Vec3) -> DirectionBits {
         DirectionBits::from_each(
             !chunk
-                .index_or_air(&I16Vec3::new(block.x, block.y + 1, block.z))
+                .index_or_full_block(&I16Vec3::new(block.x, block.y + 1, block.z))
                 .1
                 .full_block,
             !chunk
-                .index_or_air(&I16Vec3::new(block.x, block.y - 1, block.z))
+                .index_or_full_block(&I16Vec3::new(block.x, block.y - 1, block.z))
                 .1
                 .full_block,
             !chunk
-                .index_or_air(&I16Vec3::new(block.x, block.y, block.z - 1))
+                .index_or_full_block(&I16Vec3::new(block.x, block.y, block.z - 1))
                 .1
                 .full_block,
             !chunk
-                .index_or_air(&I16Vec3::new(block.x, block.y, block.z + 1))
+                .index_or_full_block(&I16Vec3::new(block.x, block.y, block.z + 1))
                 .1
                 .full_block,
             !chunk
-                .index_or_air(&I16Vec3::new(block.x + 1, block.y, block.z))
+                .index_or_full_block(&I16Vec3::new(block.x + 1, block.y, block.z))
                 .1
                 .full_block,
             !chunk
-                .index_or_air(&I16Vec3::new(block.x - 1, block.y, block.z))
+                .index_or_full_block(&I16Vec3::new(block.x - 1, block.y, block.z))
                 .1
                 .full_block,
         )

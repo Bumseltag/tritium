@@ -114,7 +114,7 @@ fn reload(
     }
 }
 
-const RENDER_DISTANCE: i32 = 24;
+const RENDER_DISTANCE: i32 = 48;
 const HALF_RENDER_DISTANCE: i32 = RENDER_DISTANCE / 2;
 
 fn generate_chunks_around_camera(
