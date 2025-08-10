@@ -3,11 +3,14 @@ use std::fs::File;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use std::{any::type_name, env, fs, future::poll_fn, path::PathBuf, str::FromStr, task::Poll};
 
 use async_channel::{Receiver, Sender};
+use async_lock::{Mutex, MutexGuardArc};
 use bevy::platform::hash::FixedHasher;
 use bevy::prelude::*;
+use bevy::tasks::{Task, block_on};
 use bevy::{
     asset::{Assets, RenderAssetUsages},
     ecs::{
@@ -31,36 +34,59 @@ use tracing::{error, info_span, instrument};
 use zip::ZipArchive;
 
 use crate::{
-    AppState, RegistryStatus,
+    AppState,
     chunk::{Chunk, CulledChunk, LoadedBlockModel},
     textures::{ATLAS_SIZE, DynamicTextureAtlas, LoadedTexture},
 };
-pub struct Registries {
-    pub blockstates: Registry<BlockstateFile>,
-    pub models: Registry<LoadedBlockModel>,
-    pub textures: Registry<LoadedTexture>,
-    pub atlas_alloc: AtlasAllocator,
-    pub to_loader_recv: Receiver<ToLoader>,
-    pub from_loader_send: Sender<FromLoader>,
-    packs: Vec<PathBuf>,
-    archives: HashMap<String, ZipArchive<File>>,
+
+#[derive(Resource, Clone)]
+pub struct RegistriesHandle(Arc<Mutex<Registries>>);
+
+impl RegistriesHandle {
+    pub async fn lock(&self) -> MutexGuardArc<Registries> {
+        self.0.lock_arc().await
+    }
+
+    pub fn lock_blocking(&self) -> MutexGuardArc<Registries> {
+        self.0.lock_arc_blocking()
+    }
 }
 
-impl Registries {
-    pub fn new(
-        packs: Vec<PathBuf>,
-        to_loader_recv: Receiver<ToLoader>,
-        from_loader_send: Sender<FromLoader>,
-    ) -> Self {
+#[derive(Component)]
+pub struct ChunkTask {
+    pos: IVec2,
+    task: Option<Task<Mesh>>,
+}
+
+impl ChunkTask {
+    pub fn create(pos: IVec2, registries: RegistriesHandle) -> Self {
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            let chunk = Box::new(Chunk::example_chunk(&mut *registries.lock().await).await);
+            let culled_chunk = CulledChunk::new(chunk);
+            culled_chunk.to_mesh().unwrap().to_bevy_mesh()
+        });
+
         Self {
-            blockstates: Registry::new(),
-            models: Registry::new(),
-            textures: Registry::new(),
-            atlas_alloc: AtlasAllocator::new(Size2D::new(ATLAS_SIZE as i32, ATLAS_SIZE as i32)),
-            to_loader_recv,
-            from_loader_send,
-            packs,
-            archives: HashMap::new(),
+            pos,
+            task: Some(task),
+        }
+    }
+
+    fn try_complete(
+        &mut self,
+        self_entity: Entity,
+        commands: &mut Commands,
+        atlas: &mut ResMut<DynamicTextureAtlas>,
+        meshes: &mut ResMut<Assets<Mesh>>,
+    ) {
+        if self.task.as_ref().unwrap().is_finished() {
+            let mesh = block_on(self.task.take().unwrap());
+            commands.spawn((
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(atlas.material.clone()),
+                Transform::from_xyz(self.pos.x as f32 * 16.0, -64.0, self.pos.y as f32 * 16.0),
+            ));
+            commands.entity(self_entity).despawn();
         }
     }
 
@@ -99,71 +125,37 @@ impl Registries {
         }
         let packs = packs.unwrap();
 
-        let (to_loader_send, to_loader_recv) = async_channel::unbounded();
         let (from_loader_send, from_loader_recv) = async_channel::unbounded();
         commands.insert_resource(LoaderChannels {
-            to_loader: to_loader_send,
             from_loader: from_loader_recv,
         });
-
-        AsyncComputeTaskPool::get()
-            .spawn(async move {
-                let mut reg = Registries::new(packs, to_loader_recv, from_loader_send);
-
-                while let Ok(msg) = reg.to_loader_recv.recv().await {
-                    match msg {
-                        ToLoader::GenChunk(pos) => {
-                            let chunk = Box::new(Chunk::example_chunk(&mut reg).await);
-                            let culled_chunk = CulledChunk::new(chunk);
-                            let chunk_mesh = culled_chunk.to_mesh().unwrap().to_bevy_mesh();
-                            reg.from_loader_send
-                                .send(FromLoader::LoadedChunk(
-                                    pos,
-                                    chunk_mesh,
-                                    reg.get_total_status(),
-                                ))
-                                .await
-                                .unwrap();
-                        }
-                    }
-                }
-            })
-            .detach();
-
+        commands.insert_resource(RegistriesHandle(Arc::new(Mutex::new(Registries::new(
+            packs,
+            from_loader_send,
+        )))));
         next_state.set(AppState::Main);
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_sys(
+    pub fn try_complete_sys(
         mut commands: Commands,
-        channels: ResMut<LoaderChannels>,
+        mut atlas: ResMut<DynamicTextureAtlas>,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut query: Query<(Entity, &mut ChunkTask)>,
+    ) {
+        for (entity, mut task) in &mut query {
+            task.try_complete(entity, &mut commands, &mut atlas, &mut meshes);
+        }
+    }
+
+    pub fn load_textures_sys(
         mut atlas: ResMut<DynamicTextureAtlas>,
         mut layouts: ResMut<Assets<TextureAtlasLayout>>,
         mut images: ResMut<Assets<Image>>,
-        mut meshes: ResMut<Assets<Mesh>>,
-        mut status_res: ResMut<RegistryStatus>,
         mut materials: ResMut<Assets<StandardMaterial>>,
+        channels: ResMut<LoaderChannels>,
     ) {
         while let Ok(msg) = channels.from_loader.try_recv() {
             match msg {
-                FromLoader::LoadedChunk(pos, mesh, status) => {
-                    let _span = info_span!("LoadedChunk").entered();
-                    // images
-                    //     .get(&atlas.atlas)
-                    //     .unwrap()
-                    //     .clone()
-                    //     .try_into_dynamic()
-                    //     .unwrap()
-                    //     .save("atlas.png")
-                    //     .unwrap();
-                    commands.spawn((
-                        Mesh3d(meshes.add(mesh)),
-                        MeshMaterial3d(atlas.material.clone()),
-                        Transform::from_xyz(pos.x as f32 * 16.0, -64.0, pos.y as f32 * 16.0),
-                        // Transform::from_xyz(0.0, -64.0, 0.0),
-                    ));
-                    status_res.0 = status;
-                }
                 FromLoader::LoadTextureIntoAtlas(texture) => {
                     let _span = info_span!("LoadTextureIntoAtlas").entered();
                     let image = Image::from_dynamic(
@@ -177,26 +169,168 @@ impl Registries {
 
                     // make bevy update canvas on the GPU
                     materials.get_mut(&atlas.material);
-
-                    // images
-                    //     .get(&atlas.atlas)
-                    //     .unwrap()
-                    //     .clone()
-                    //     .try_into_dynamic()
-                    //     .unwrap()
-                    //     .save("atlas.png")
-                    //     .unwrap();
-                } //     FromLoader::LoadedBlockModel(_res_loc, mesh) => {
-                  //         commands.spawn((
-                  //             Mesh3d(meshes.add(*mesh)),
-                  //             MeshMaterial3d(atlas.material.clone()),
-                  //             Transform::from_xyz(3.0, 0.0, *i * 1.5),
-                  //         ));
-                  //         *i += 1.0;
-                  //     }
+                }
             }
         }
     }
+}
+
+pub struct Registries {
+    pub blockstates: Registry<BlockstateFile>,
+    pub models: Registry<LoadedBlockModel>,
+    pub textures: Registry<LoadedTexture>,
+    pub atlas_alloc: AtlasAllocator,
+    pub from_loader_send: Sender<FromLoader>,
+    packs: Vec<PathBuf>,
+    archives: HashMap<String, ZipArchive<File>>,
+}
+
+impl Registries {
+    pub fn new(packs: Vec<PathBuf>, from_loader_send: Sender<FromLoader>) -> Self {
+        Self {
+            blockstates: Registry::new(),
+            models: Registry::new(),
+            textures: Registry::new(),
+            atlas_alloc: AtlasAllocator::new(Size2D::new(ATLAS_SIZE as i32, ATLAS_SIZE as i32)),
+            from_loader_send,
+            packs,
+            archives: HashMap::new(),
+        }
+    }
+
+    // pub fn init_sys(
+    //     mut commands: Commands,
+    //     mut next_state: ResMut<NextState<AppState>>,
+    //     asset_server: Res<AssetServer>,
+    // ) {
+    //     let packs = get_packs();
+
+    //     if let Err(err) = packs {
+    //         error!("Unable to load resource packs: {}", err);
+    //         commands.spawn((
+    //             Node {
+    //                 position_type: PositionType::Absolute,
+    //                 top: Val::Px(0.0),
+    //                 bottom: Val::Px(0.0),
+    //                 left: Val::Px(0.0),
+    //                 right: Val::Px(0.0),
+    //                 display: Display::Grid,
+    //                 justify_items: JustifyItems::Center,
+    //                 align_items: AlignItems::Center,
+    //                 ..Default::default()
+    //             },
+    //             children![(
+    //                 Text::new("Unable to load resource packs.\nSee logs for more info."),
+    //                 TextColor(Color::srgb_u8(255, 152, 148)),
+    //                 TextFont {
+    //                     font: asset_server.load("JetBrainsMono-Regular.ttf"),
+    //                     font_size: 40.0,
+    //                     ..Default::default()
+    //                 }
+    //             )],
+    //         ));
+    //         return;
+    //     }
+    //     let packs = packs.unwrap();
+
+    //     let (to_loader_send, to_loader_recv) = async_channel::unbounded();
+    //     let (from_loader_send, from_loader_recv) = async_channel::unbounded();
+    //     commands.insert_resource(LoaderChannels {
+    //         to_loader: to_loader_send,
+    //         from_loader: from_loader_recv,
+    //     });
+
+    //     AsyncComputeTaskPool::get()
+    //         .spawn(async move {
+    //             let mut reg = Registries::new(packs, to_loader_recv, from_loader_send);
+
+    //             while let Ok(msg) = reg.to_loader_recv.recv().await {
+    //                 match msg {
+    //                     ToLoader::GenChunk(pos) => {
+    //                         let chunk = Box::new(Chunk::example_chunk(&mut reg).await);
+    //                         let culled_chunk = CulledChunk::new(chunk);
+    //                         let chunk_mesh = culled_chunk.to_mesh().unwrap().to_bevy_mesh();
+    //                         reg.from_loader_send
+    //                             .send(FromLoader::LoadedChunk(
+    //                                 pos,
+    //                                 chunk_mesh,
+    //                                 reg.get_total_status(),
+    //                             ))
+    //                             .await
+    //                             .unwrap();
+    //                     }
+    //                 }
+    //             }
+    //         })
+    //         .detach();
+
+    //     next_state.set(AppState::Main);
+    // }
+
+    // #[allow(clippy::too_many_arguments)]
+    // pub fn update_sys(
+    //     mut commands: Commands,
+    //     channels: ResMut<LoaderChannels>,
+    //     mut atlas: ResMut<DynamicTextureAtlas>,
+    //     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
+    //     mut images: ResMut<Assets<Image>>,
+    //     mut meshes: ResMut<Assets<Mesh>>,
+    //     mut status_res: ResMut<RegistryStatus>,
+    //     mut materials: ResMut<Assets<StandardMaterial>>,
+    // ) {
+    //     while let Ok(msg) = channels.from_loader.try_recv() {
+    //         match msg {
+    //             FromLoader::LoadedChunk(pos, mesh, status) => {
+    //                 let _span = info_span!("LoadedChunk").entered();
+    //                 // images
+    //                 //     .get(&atlas.atlas)
+    //                 //     .unwrap()
+    //                 //     .clone()
+    //                 //     .try_into_dynamic()
+    //                 //     .unwrap()
+    //                 //     .save("atlas.png")
+    //                 //     .unwrap();
+    //                 commands.spawn((
+    //                     Mesh3d(meshes.add(mesh)),
+    //                     MeshMaterial3d(atlas.material.clone()),
+    //                     Transform::from_xyz(pos.x as f32 * 16.0, -64.0, pos.y as f32 * 16.0),
+    //                     // Transform::from_xyz(0.0, -64.0, 0.0),
+    //                 ));
+    //                 status_res.0 = status;
+    //             }
+    //             FromLoader::LoadTextureIntoAtlas(texture) => {
+    //                 let _span = info_span!("LoadTextureIntoAtlas").entered();
+    //                 let image = Image::from_dynamic(
+    //                     DynamicImage::from(*texture),
+    //                     true,
+    //                     RenderAssetUsages::MAIN_WORLD,
+    //                 );
+    //                 atlas
+    //                     .add(&image, layouts.as_mut(), images.as_mut())
+    //                     .unwrap();
+
+    //                 // make bevy update canvas on the GPU
+    //                 materials.get_mut(&atlas.material);
+
+    //                 // images
+    //                 //     .get(&atlas.atlas)
+    //                 //     .unwrap()
+    //                 //     .clone()
+    //                 //     .try_into_dynamic()
+    //                 //     .unwrap()
+    //                 //     .save("atlas.png")
+    //                 //     .unwrap();
+    //             } //     FromLoader::LoadedBlockModel(_res_loc, mesh) => {
+    //               //         commands.spawn((
+    //               //             Mesh3d(meshes.add(*mesh)),
+    //               //             MeshMaterial3d(atlas.material.clone()),
+    //               //             Transform::from_xyz(3.0, 0.0, *i * 1.5),
+    //               //         ));
+    //               //         *i += 1.0;
+    //               //     }
+    //         }
+    //     }
+    // }
 
     pub fn get<'a, L: LoadedResource + 'a>(
         &'a self,
@@ -403,18 +537,12 @@ impl<L: LoadedResource> Registry<L> {
     }
 }
 
-pub enum ToLoader {
-    GenChunk(IVec2),
-}
-
 pub enum FromLoader {
-    LoadedChunk(IVec2, Mesh, Status),
     LoadTextureIntoAtlas(Box<RgbaImage>),
 }
 
 #[derive(Resource)]
 pub struct LoaderChannels {
-    pub to_loader: Sender<ToLoader>,
     pub from_loader: Receiver<FromLoader>,
 }
 

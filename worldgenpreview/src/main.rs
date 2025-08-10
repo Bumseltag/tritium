@@ -9,11 +9,8 @@ use bevy::{
 };
 use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
-use crate::{
-    chunk::Chunk,
-    registry::{LoaderChannels, Registries, Status, ToLoader},
-    textures::DynamicTextureAtlas,
-};
+use crate::registry::{ChunkTask, RegistriesHandle};
+use crate::{chunk::Chunk, textures::DynamicTextureAtlas};
 
 mod chunk;
 mod registry;
@@ -37,14 +34,14 @@ fn main() {
     .init_resource::<DynamicTextureAtlas>()
     .init_resource::<UpdateStatsTimer>()
     .init_resource::<VSyncMode>()
-    .init_resource::<RegistryStatus>()
     .init_state::<AppState>()
-    .add_systems(Startup, (Registries::init_sys, setup))
+    .add_systems(Startup, (ChunkTask::init_sys, setup))
     .add_systems(OnEnter(AppState::Main), (setup_stats, spawn_example_chunks))
     .add_systems(
         Update,
         (
-            Registries::update_sys,
+            ChunkTask::try_complete_sys,
+            ChunkTask::load_textures_sys,
             spectator_controls,
             misc_controls,
             update_stats,
@@ -91,15 +88,13 @@ fn setup(mut commands: Commands) {
     ));
 }
 
-fn spawn_example_chunks(channels: Res<LoaderChannels>) {
-    for x in 0..16 {
-        for z in 0..16 {
-            channels
-                .to_loader
-                .send_blocking(ToLoader::GenChunk(IVec2::new(x, z)))
-                .unwrap();
-        }
-    }
+fn spawn_example_chunks(mut commands: Commands, registries: Res<RegistriesHandle>) {
+    let registries = registries.clone();
+    commands.spawn_batch((0..32 * 32).map(move |i| {
+        let x = i % 32;
+        let z = i / 32;
+        ChunkTask::create(IVec2::new(x, z), registries.clone())
+    }));
 }
 
 fn spectator_controls(
@@ -301,28 +296,16 @@ impl Default for VSyncMode {
     }
 }
 
-#[derive(Resource)]
-pub struct RegistryStatus(Status);
-
-impl Default for RegistryStatus {
-    fn default() -> Self {
-        Self(Status {
-            ok: 0,
-            errs: 0,
-            loading: 0,
-        })
-    }
-}
-
 fn update_stats(
     diagnostics: Res<DiagnosticsStore>,
     mut dyn_text: Query<(&mut TextSpan, &DynText)>,
     mut timer: ResMut<UpdateStatsTimer>,
-    status_res: Res<RegistryStatus>,
+    registries: Res<RegistriesHandle>,
     vsync_enabled: Res<VSyncMode>,
     time: Res<Time>,
 ) {
     timer.0.tick(time.delta());
+    let status = registries.lock_blocking().get_total_status();
     for (mut text, id) in &mut dyn_text {
         match (id.0, timer.0.just_finished()) {
             ("fps", true) => {
@@ -349,9 +332,9 @@ fn update_stats(
                     **text = "----.-".into();
                 }
             }
-            ("resources/ok", _) => **text = format!("{:>3} Ok ", status_res.0.ok),
-            ("resources/err", _) => **text = format!("{:>3} Err ", status_res.0.errs),
-            ("resources/ldg", _) => **text = format!("{:>3} Ldg ", status_res.0.loading),
+            ("resources/ok", _) => **text = format!("{:>3} Ok ", status.ok),
+            ("resources/err", _) => **text = format!("{:>3} Err ", status.errs),
+            ("resources/ldg", _) => **text = format!("{:>3} Ldg ", status.loading),
             _ => {}
         }
     }
