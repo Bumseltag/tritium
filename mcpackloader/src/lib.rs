@@ -18,6 +18,7 @@ use thiserror::Error;
 pub mod blockstates;
 pub mod models;
 pub mod textures;
+pub mod worldgen;
 
 #[derive(Debug)]
 pub struct ResourceLocation<T>(UntypedResourceLocation, PhantomData<T>);
@@ -67,6 +68,15 @@ impl<T> ResourceLocation<T> {
 
     pub fn to_assets_path(&self, directory: impl AsRef<Path>, ext: &str) -> PathBuf {
         let mut path = PathBuf::from_str("assets").expect("wtf");
+        path.push(self.namespace());
+        path.push(directory);
+        path.push(self.path());
+        path.set_extension(ext);
+        path
+    }
+
+    pub fn to_data_path(&self, directory: impl AsRef<Path>, ext: &str) -> PathBuf {
+        let mut path = PathBuf::from_str("data").expect("wtf");
         path.push(self.namespace());
         path.push(directory);
         path.push(self.path());
