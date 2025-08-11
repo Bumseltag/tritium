@@ -67,7 +67,7 @@ impl<T> ResourceLocation<T> {
 
     pub fn to_assets_path(&self, directory: impl AsRef<Path>, ext: &str) -> PathBuf {
         let mut path = PathBuf::from_str("assets").expect("wtf");
-        path.push(self.namespace().to_string());
+        path.push(self.namespace());
         path.push(directory);
         path.push(self.path());
         path.set_extension(ext);
