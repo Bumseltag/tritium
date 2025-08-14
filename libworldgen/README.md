@@ -23,8 +23,3 @@ You can opt out of all the java tests by disabling the `java_tests` feature flag
 ```sh
 cargo test
 ```
-
-## Project Structure
-
-`libworldgen-java-tests` contains a Java project that generates tests for libworldgen
-using the actual minecraft code, to make sure the libworldgen matches with the original minecraft code exactly.
