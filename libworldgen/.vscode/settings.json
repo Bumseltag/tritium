@@ -1,0 +1,5 @@
+{
+    "rust-analyzer.cargo.features": [
+        "java_tests_module"
+    ]
+}
