@@ -29,9 +29,15 @@ fn compile_java() {
     }
 
     let gradlew = if cfg!(windows) {
-        "./libworldgen-java-tests/gradlew.bat"
+        PathBuf::from_str("./libworldgen-java-tests/gradlew.bat")
+            .unwrap()
+            .canonicalize()
+            .unwrap()
     } else {
-        "./libworldgen-java-tests/gradlew"
+        PathBuf::from_str("./libworldgen-java-tests/gradlew")
+            .unwrap()
+            .canonicalize()
+            .unwrap()
     };
     let output = Command::new(gradlew)
         .args(["--no-daemon", "--console=plain", "uberJar"])
@@ -51,9 +57,11 @@ fn compile_java() {
         );
         println!("cargo::error=");
         println!("cargo::error=stdout:");
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
+        for line in String::from_utf8_lossy(&output.stderr).lines() {
             println!("cargo::error={line}");
         }
+
+        return;
     }
 
     save_last_changed("libworldgen-java-tests-last-changed");
