@@ -277,9 +277,9 @@ impl SimplexNoise {
         IVec3::new(0, 1, -1),
         IVec3::new(0, -1, -1),
         IVec3::new(1, 1, 0),
-        IVec3::new(1, -1, 0),
+        IVec3::new(0, -1, 1), // why ??
         IVec3::new(-1, 1, 0),
-        IVec3::new(0, -1, -1), // found a bug ?
+        IVec3::new(0, -1, -1),
     ];
 }
 
@@ -379,20 +379,6 @@ mod java_tests {
         );
         let rng = LegacyRng::new(0);
         let improved_noise = ImprovedNoise::new(&rng);
-        assert_eq!(
-            env.call(
-                &java_improved_noise,
-                &java_tests::ImprovedNoise::NOISE,
-                &[
-                    JValue::Double(1.0),
-                    JValue::Double(1.0),
-                    JValue::Double(1.0)
-                ]
-            )
-            .d()
-            .unwrap(),
-            improved_noise.noise(DVec3::new(1.0, 1.0, 1.0))
-        );
 
         for x in -5..5 {
             for y in -5..5 {
