@@ -45,10 +45,11 @@ impl NormalNoise {
     fn expected_deviation(octave_range: i32) -> f64 {
         0.1 * (1.0 + (1.0 / (octave_range + 1) as f64))
     }
+}
 
-    pub fn get_value(&self, pos: DVec3) -> f64 {
-        (self.second.get_value(pos * 1.0181268882175227) + self.first.get_value(pos))
-            * self.value_factor
+impl Noise3d for NormalNoise {
+    fn get(&self, pos: DVec3) -> f64 {
+        (self.second.get(pos * 1.0181268882175227) + self.first.get(pos)) * self.value_factor
     }
 }
 
@@ -128,14 +129,20 @@ impl PerlinNoise {
         }
     }
 
-    pub fn get_value(&self, pos: DVec3) -> f64 {
+    fn wrap(value: f64) -> f64 {
+        value - floor_i64(value / 3.3554432e7 + 0.5) as f64 * 3.3554432e7
+    }
+}
+
+impl Noise3d for PerlinNoise {
+    fn get(&self, pos: DVec3) -> f64 {
         let mut res = 0.0;
         let mut input_factor = self.lowest_freq_input_factor;
         let mut value_factor = self.lowest_freq_value_factor;
 
         for (i, noise) in self.noise_levels.iter().enumerate() {
             if let Some(noise) = noise {
-                let noise_val = noise.noise(DVec3::new(
+                let noise_val = noise.get(DVec3::new(
                     Self::wrap(pos.x * input_factor),
                     Self::wrap(pos.y * input_factor),
                     Self::wrap(pos.z * input_factor),
@@ -148,10 +155,6 @@ impl PerlinNoise {
         }
 
         res
-    }
-
-    fn wrap(value: f64) -> f64 {
-        value - floor_i64(value / 3.3554432e7 + 0.5) as f64 * 3.3554432e7
     }
 }
 
@@ -189,13 +192,6 @@ impl ImprovedNoise {
             lut,
             offset: DVec3::new(x, y, z),
         }
-    }
-
-    pub fn noise(&self, pos: DVec3) -> f64 {
-        let pos = self.offset + pos;
-        let rounded_pos = IVec3::new(floor_i32(pos.x), floor_i32(pos.y), floor_i32(pos.z));
-        let remainder_pos = pos - rounded_pos.as_dvec3();
-        self.sample_and_lerp(rounded_pos, remainder_pos)
     }
 
     fn sample_and_lerp(&self, rounded_pos: IVec3, remainder_pos: DVec3) -> f64 {
@@ -260,6 +256,19 @@ impl ImprovedNoise {
     }
 }
 
+impl Noise3d for ImprovedNoise {
+    fn get(&self, pos: DVec3) -> f64 {
+        let pos = self.offset + pos;
+        let rounded_pos = IVec3::new(floor_i32(pos.x), floor_i32(pos.y), floor_i32(pos.z));
+        let remainder_pos = pos - rounded_pos.as_dvec3();
+        self.sample_and_lerp(rounded_pos, remainder_pos)
+    }
+}
+
+pub trait Noise3d {
+    fn get(&self, pos: DVec3) -> f64;
+}
+
 pub struct SimplexNoise {}
 
 impl SimplexNoise {
@@ -290,7 +299,7 @@ mod java_tests {
 
     use crate::{
         java_tests::{self, Class, get_jvm_env},
-        noise::ImprovedNoise,
+        noise::{ImprovedNoise, Noise3d},
         random::LegacyRng,
     };
 
@@ -394,7 +403,7 @@ mod java_tests {
                         )
                         .d()
                         .unwrap(),
-                        improved_noise.noise(DVec3::new(x, y, z)),
+                        improved_noise.get(DVec3::new(x, y, z)),
                         "at {x}, {y}, {z}"
                     );
                 }
