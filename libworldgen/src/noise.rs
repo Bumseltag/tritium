@@ -63,16 +63,22 @@ pub struct PerlinNoise {
     max_value: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PerlinNoiseMode {
+    Legacy,
+    New,
+}
+
 impl PerlinNoise {
     pub fn create(rng: &impl Rng, first_octave: i32, amplitudes: Vec<f64>) -> Self {
-        Self::new(rng, first_octave, amplitudes, true)
+        Self::new(rng, first_octave, amplitudes, PerlinNoiseMode::New)
     }
 
-    fn new(rng: &impl Rng, first_octave: i32, amplitudes: Vec<f64>, boolean: bool) -> Self {
+    fn new(rng: &impl Rng, first_octave: i32, amplitudes: Vec<f64>, mode: PerlinNoiseMode) -> Self {
         let ampls = amplitudes.len() as i32;
         let neg_first_octave = first_octave;
         let mut noise_levels = vec![None; amplitudes.len()];
-        if boolean {
+        if mode == PerlinNoiseMode::New {
             let rng_factory = rng.fork_factory();
 
             for (i, amplitude) in amplitudes.iter().enumerate() {
