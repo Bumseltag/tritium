@@ -217,6 +217,7 @@ name = "libworldgen"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "hashbrown",
  "itertools",
  "jni",
  "mcpackloader",

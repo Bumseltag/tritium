@@ -3,3 +3,4 @@ mod helpers;
 mod java_tests;
 pub mod noise;
 pub mod random;
+pub mod registry;
