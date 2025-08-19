@@ -304,8 +304,8 @@ mod java_tests {
     use jni::objects::JValue;
 
     use crate::{
-        java_tests::{self, Class, get_jvm_env},
-        noise::{ImprovedNoise, Noise3d},
+        java_tests::{self, Class, DoubleArrayList, get_jvm_env},
+        noise::{ImprovedNoise, Noise3d, PerlinNoise},
         random::LegacyRng,
     };
 
@@ -328,6 +328,54 @@ mod java_tests {
                 ImprovedNoise::grad_dot(0, DVec3::new(10.0, -10.0, 123.0)),
                 "i = {i}"
             );
+        }
+    }
+
+    // normal noise isn't tested, as it's constructor requires `NoiseParameters`,
+    // which relies on registries. Idk how to set those up.
+
+    #[test]
+    fn perlin_noise() {
+        let mut env = get_jvm_env();
+        let java_rng = env.construct(
+            &Class::LegacyRandomSource,
+            java_tests::RandomSource::CONSTRUCTOR,
+            &[JValue::Long(0)],
+        );
+        let java_amplitudes = DoubleArrayList::create(&mut env, &[3.0, 2.0, 1.0]);
+        let java_perlin_noise = env
+            .call_static(
+                &java_tests::PerlinNoise::CREATE,
+                &[
+                    JValue::Object(&java_rng),
+                    JValue::Int(2),
+                    JValue::Object(&java_amplitudes),
+                ],
+            )
+            .l()
+            .unwrap();
+        let rng = LegacyRng::new(0);
+        let perlin_noise = PerlinNoise::create(&rng, 2, vec![3.0, 2.0, 1.0]);
+        for x in -5..5 {
+            for y in -5..5 {
+                for z in -5..5 {
+                    let x = x as f64 / 2.5;
+                    let y = y as f64 / 2.5;
+                    let z = z as f64 / 2.5;
+
+                    assert_eq!(
+                        env.call(
+                            &java_perlin_noise,
+                            &java_tests::PerlinNoise::GET_VALUE,
+                            &[JValue::Double(x), JValue::Double(y), JValue::Double(z)]
+                        )
+                        .d()
+                        .unwrap(),
+                        perlin_noise.get(DVec3::new(x, y, z)),
+                        "at {x}, {y}, {z}"
+                    );
+                }
+            }
         }
     }
 
@@ -398,9 +446,9 @@ mod java_tests {
         for x in -5..5 {
             for y in -5..5 {
                 for z in -5..5 {
-                    let x = x as f64 / 5.0;
-                    let y = y as f64 / 5.0;
-                    let z = z as f64 / 5.0;
+                    let x = x as f64 / 2.5;
+                    let y = y as f64 / 2.5;
+                    let z = z as f64 / 2.5;
                     assert_eq!(
                         env.call(
                             &java_improved_noise,

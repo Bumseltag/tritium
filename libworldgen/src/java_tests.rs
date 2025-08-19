@@ -24,8 +24,10 @@ pub struct Classes<'a> {
     legacy_random_source: JClass<'a>,
     xoroshiro_random_source: JClass<'a>,
     random_support: JClass<'a>,
+    perlin_noise: JClass<'a>,
     improved_noise: JClass<'a>,
     mth: JClass<'a>,
+    double_array_list: JClass<'a>,
 }
 
 impl<'a> Classes<'a> {
@@ -34,8 +36,10 @@ impl<'a> Classes<'a> {
             Class::LegacyRandomSource => &self.legacy_random_source,
             Class::XoroshiroRandomSource => &self.xoroshiro_random_source,
             Class::RandomSupport => &self.random_support,
+            Class::PerlinNoise => &self.perlin_noise,
             Class::ImprovedNoise => &self.improved_noise,
             Class::Mth => &self.mth,
+            Class::DoubleArrayList => &self.double_array_list,
         }
     }
 }
@@ -58,10 +62,16 @@ impl<'a> Env<'a> {
                 random_support: attach_guard
                     .find_class("net/minecraft/world/level/levelgen/RandomSupport")
                     .unwrap(),
+                perlin_noise: attach_guard
+                    .find_class("net/minecraft/world/level/levelgen/synth/PerlinNoise")
+                    .unwrap(),
                 improved_noise: attach_guard
                     .find_class("net/minecraft/world/level/levelgen/synth/ImprovedNoise")
                     .unwrap(),
                 mth: attach_guard.find_class("net/minecraft/util/Mth").unwrap(),
+                double_array_list: attach_guard
+                    .find_class("it/unimi/dsi/fastutil/doubles/DoubleArrayList")
+                    .unwrap(),
             },
             attach_guard,
         }
@@ -101,6 +111,8 @@ pub enum Class {
     XoroshiroRandomSource,
     RandomSupport,
     ImprovedNoise,
+    PerlinNoise,
+    DoubleArrayList,
     Mth,
 }
 
@@ -190,6 +202,20 @@ impl Seed128bit {
     };
 }
 
+pub struct PerlinNoise;
+
+impl PerlinNoise {
+    pub const CREATE: StaticFn = StaticFn {
+        class: Class::PerlinNoise,
+        name: "create",
+        sig: "(Lnet/minecraft/util/RandomSource;ILit/unimi/dsi/fastutil/doubles/DoubleList;)Lnet/minecraft/world/level/levelgen/synth/PerlinNoise;",
+    };
+    pub const GET_VALUE: Fn = Fn {
+        name: "getValue",
+        sig: "(DDD)D",
+    };
+}
+
 pub struct ImprovedNoise;
 
 impl ImprovedNoise {
@@ -235,4 +261,26 @@ impl Mth {
         name: "floor",
         sig: "(D)I",
     };
+}
+
+pub struct DoubleArrayList;
+
+impl DoubleArrayList {
+    pub const CONSTRUCTOR: &'static str = "([D)V";
+
+    pub fn create<'a>(env: &mut Env<'a>, values: &[f64]) -> JObject<'a> {
+        let arr = env
+            .attach_guard
+            .new_double_array(values.len() as i32)
+            .unwrap();
+        env.attach_guard
+            .set_double_array_region(&arr, 0, values)
+            .unwrap();
+        let list = env.construct(
+            &Class::DoubleArrayList,
+            DoubleArrayList::CONSTRUCTOR,
+            &[JValue::Object(&arr)],
+        );
+        list
+    }
 }
