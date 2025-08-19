@@ -6,6 +6,8 @@ use crate::{
     random::{Rng, RngFactory},
 };
 
+/// Noise used in density functions
+/// Equivalent to `net.minecraft.world.level.levelgen.synth.NormalNoise`
 pub struct NormalNoise {
     value_factor: f64,
     first: PerlinNoise,
@@ -15,6 +17,7 @@ pub struct NormalNoise {
 }
 
 impl NormalNoise {
+    /// Creates a new [`NormalNoise`] from some [`NoiseParameters`].
     pub fn new(rng: &impl Rng, parameters: NoiseParameters) -> Self {
         let first =
             PerlinNoise::create(rng, parameters.first_octave, parameters.amplitudes.clone());
@@ -271,7 +274,9 @@ impl Noise3d for ImprovedNoise {
     }
 }
 
+/// A 3d noise
 pub trait Noise3d {
+    /// Samples the noise at a given location
     fn get(&self, pos: DVec3) -> f64;
 }
 
