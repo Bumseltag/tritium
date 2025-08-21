@@ -276,11 +276,10 @@ impl DoubleArrayList {
         env.attach_guard
             .set_double_array_region(&arr, 0, values)
             .unwrap();
-        let list = env.construct(
+        env.construct(
             &Class::DoubleArrayList,
             DoubleArrayList::CONSTRUCTOR,
             &[JValue::Object(&arr)],
-        );
-        list
+        )
     }
 }
