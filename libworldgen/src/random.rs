@@ -167,6 +167,12 @@ impl Rng for LegacyRng {
 const F32_MULTIPLIER: f32 = 1.0 / ((1i64 << 24) as f32);
 const F64_MULTIPLIER: f64 = 1.0 / ((1i64 << 53) as f64);
 
+impl Default for LegacyRng {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 /// Implements the Marsaglia polar method for generating sampling a number from the normal distribution.
 ///
 /// Equivalent to `net.minecraft.world.level.levelgen.MarsagliaPolarGaussian`
@@ -401,6 +407,12 @@ impl Clone for XoroshiroRng {
             inner: Mutex::new(self.inner.lock().unwrap().clone()),
             gaussian_rng: Mutex::new(MarsagliaPolarGaussian::new()),
         }
+    }
+}
+
+impl Default for XoroshiroRng {
+    fn default() -> Self {
+        Self::new(0)
     }
 }
 
