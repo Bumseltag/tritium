@@ -1,6 +1,7 @@
 use std::{
     env,
     fs::{self, File},
+    io::Write,
     path::PathBuf,
     process::{Command, Stdio},
     str::FromStr,
@@ -57,7 +58,7 @@ fn compile_java() {
         );
         println!("cargo::error=");
         println!("cargo::error=stdout:");
-        for line in String::from_utf8_lossy(&output.stderr).lines() {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
             println!("cargo::error={line}");
         }
 
@@ -91,7 +92,12 @@ fn has_changed(watch: &[&str], id: &str) -> bool {
 }
 
 fn save_last_changed(id: &str) {
-    File::create("target".to_owned() + "/" + id).unwrap();
+    File::create("target".to_owned() + "/" + id)
+        .unwrap()
+        .write_all(
+            b"this file is created by build.rs to track whether it needs to recompile something.",
+        )
+        .unwrap();
 }
 
 fn feature(f: &str) -> bool {
