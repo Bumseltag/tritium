@@ -11,6 +11,7 @@ mcpackloader = { path = "../mcpackloader" }
 md5 = "0.8.0"
 jni = { version = "0.21.1", features = ["invocation"], optional = true }
 hashbrown = { version = "0.15.4" }
+image = { version = "0.25.6", features = ["rayon", "png"], default-features = false }
 
 [build-dependencies]
 walkdir = "2.5.0"

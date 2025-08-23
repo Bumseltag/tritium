@@ -26,6 +26,8 @@ pub struct Classes<'a> {
     random_support: JClass<'a>,
     perlin_noise: JClass<'a>,
     improved_noise: JClass<'a>,
+    blended_noise: JClass<'a>,
+    simplex_noise: JClass<'a>,
     mth: JClass<'a>,
     double_array_list: JClass<'a>,
 }
@@ -38,6 +40,8 @@ impl<'a> Classes<'a> {
             Class::RandomSupport => &self.random_support,
             Class::PerlinNoise => &self.perlin_noise,
             Class::ImprovedNoise => &self.improved_noise,
+            Class::BlendedNoise => &self.blended_noise,
+            Class::SimplexNoise => &self.simplex_noise,
             Class::Mth => &self.mth,
             Class::DoubleArrayList => &self.double_array_list,
         }
@@ -67,6 +71,12 @@ impl<'a> Env<'a> {
                     .unwrap(),
                 improved_noise: attach_guard
                     .find_class("net/minecraft/world/level/levelgen/synth/ImprovedNoise")
+                    .unwrap(),
+                blended_noise: attach_guard
+                    .find_class("bumseltag/libworldgen_java_tests/PatchedBlendedNoise")
+                    .unwrap(),
+                simplex_noise: attach_guard
+                    .find_class("net/minecraft/world/level/levelgen/synth/SimplexNoise")
                     .unwrap(),
                 mth: attach_guard.find_class("net/minecraft/util/Mth").unwrap(),
                 double_array_list: attach_guard
@@ -112,6 +122,8 @@ pub enum Class {
     RandomSupport,
     ImprovedNoise,
     PerlinNoise,
+    BlendedNoise,
+    SimplexNoise,
     DoubleArrayList,
     Mth,
 }
@@ -214,6 +226,11 @@ impl PerlinNoise {
         name: "getValue",
         sig: "(DDD)D",
     };
+    pub const WRAP: StaticFn = StaticFn {
+        class: Class::PerlinNoise,
+        name: "wrap",
+        sig: "(D)D",
+    };
 }
 
 pub struct ImprovedNoise;
@@ -244,6 +261,30 @@ impl ImprovedNoise {
     pub const ZO: Field = Field {
         name: "zo",
         ty: "D",
+    };
+}
+
+pub struct BlendedNoise;
+
+impl BlendedNoise {
+    pub const CREATE_UNSEEDED: StaticFn = StaticFn {
+        class: Class::BlendedNoise,
+        name: "createUnseeded",
+        sig: "(DDDDD)Lbumseltag/libworldgen_java_tests/PatchedBlendedNoise;",
+    };
+    pub const COMPUTE: Fn = Fn {
+        name: "compute",
+        sig: "(DDD)D",
+    };
+}
+
+pub struct SimplexNoise;
+
+impl SimplexNoise {
+    pub const CONSTRUCTOR: &'static str = "(Lnet/minecraft/util/RandomSource;)V";
+    pub const GET_VALUE_2D: Fn = Fn {
+        name: "getValue",
+        sig: "(DD)D",
     };
 }
 

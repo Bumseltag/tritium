@@ -39,6 +39,23 @@ pub fn lerp(v0: f64, v1: f64, t: f64) -> f64 {
     v0 + (t * (v1 - v0))
 }
 
+/// A lerp (Linear Interpolation) where `t` is clamped between 0 and 1,
+/// and the result is therefore clamped between `v0` and `v1`.
+pub fn clamped_lerp(v0: f64, v1: f64, t: f64) -> f64 {
+    if t <= 0.0 {
+        v0
+    } else if t >= 1.0 {
+        v1
+    } else {
+        lerp(v0, v1, t)
+    }
+}
+
+/// A lerp (Linear Interpolation)
+pub fn lerp_f32(v0: f32, v1: f32, t: f32) -> f32 {
+    v0 + (t * (v1 - v0))
+}
+
 /// A bilinear interpolation (2d lerp)
 ///
 /// The different parameters represent the coordinates for t where the output would be that parameter.

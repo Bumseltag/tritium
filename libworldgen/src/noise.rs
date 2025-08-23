@@ -1,4 +1,4 @@
-use glam::{DVec3, IVec3};
+use glam::{DVec2, DVec3, IVec2, IVec3};
 use mcpackloader::worldgen::NoiseParameters;
 
 use crate::{
@@ -68,7 +68,9 @@ pub struct PerlinNoise {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PerlinNoiseMode {
+    /// Equivalent to `false` in the java code
     Legacy,
+    /// Equivalent to `true` in the java code
     New,
 }
 
@@ -79,7 +81,7 @@ impl PerlinNoise {
 
     fn new(rng: &impl Rng, first_octave: i32, amplitudes: Vec<f64>, mode: PerlinNoiseMode) -> Self {
         let ampls = amplitudes.len() as i32;
-        let neg_first_octave = first_octave;
+        let neg_first_octave = -first_octave;
         let mut noise_levels = vec![None; amplitudes.len()];
         if mode == PerlinNoiseMode::New {
             let rng_factory = rng.fork_factory();
@@ -138,8 +140,63 @@ impl PerlinNoise {
         }
     }
 
-    fn wrap(value: f64) -> f64 {
+    pub fn wrap(value: f64) -> f64 {
         value - floor_i64(value / 3.3554432e7 + 0.5) as f64 * 3.3554432e7
+    }
+
+    /// Creates a new [`PerlinNoise`] for use by [`BlendedNoise`].
+    ///
+    /// Takes in a *sorted* list of octaves.
+    ///
+    /// # Panics
+    ///
+    /// - if `octaves` is empty
+    /// - if octaves isn't sorted in ascending order (may only panic sometimes)
+    ///
+    /// [`BlendedNoise`]: crate::density_function::ops::BlendedNoise
+    pub fn create_for_blended_noise(rng: &impl Rng, octaves: &[i32]) -> Self {
+        let (first_octave, amplitudes) = Self::make_amplitudes(octaves);
+        Self::new(rng, first_octave, amplitudes, PerlinNoiseMode::Legacy)
+    }
+
+    /// Generates amplitudes from a list of octaves, used for [`Self::create_for_blended_noise`].
+    ///
+    /// Takes in a *sorted* list of octaves.
+    ///
+    /// # Panics
+    ///
+    /// - if `octaves` is empty
+    /// - if octaves isn't sorted in ascending order (may only panic sometimes)
+    fn make_amplitudes(octaves: &[i32]) -> (i32, Vec<f64>) {
+        assert!(!octaves.is_empty(), "`octaves` shouldn't be empty");
+
+        let first_octave = *octaves.first().unwrap();
+        let octave_range = octaves.last().unwrap() - first_octave + 1;
+        assert!(
+            octave_range > 0,
+            "`octaves` should be sorted in ascending order"
+        );
+
+        let mut amplitudes = vec![0.0; octave_range as usize];
+        for octave in octaves {
+            assert!(
+                octave - first_octave >= 0,
+                "`octaves` should be sorted in ascending order"
+            );
+            amplitudes[(octave - first_octave) as usize] = 1.0;
+        }
+
+        (first_octave, amplitudes)
+    }
+
+    /// Gets the [`ImprovedNoise`] instance of an octave.
+    pub fn get_octave_noise(&self, octave: i32) -> Option<&ImprovedNoise> {
+        let idx = self.noise_levels.len() as i32 - 1 - octave;
+        // check cast to usize
+        if idx < 0 {
+            return None;
+        }
+        self.noise_levels.get(idx as usize).and_then(Option::as_ref)
     }
 }
 
@@ -203,7 +260,12 @@ impl ImprovedNoise {
         }
     }
 
-    fn sample_and_lerp(&self, rounded_pos: IVec3, remainder_pos: DVec3) -> f64 {
+    fn sample_and_lerp(
+        &self,
+        rounded_pos: IVec3,
+        remainder_pos: DVec3,
+        raw_remainder_y: f64,
+    ) -> f64 {
         // im so sorry for whats about to happen but i can't think of better variable names
         let x = self.lut(rounded_pos.x);
         let x1 = self.lut(rounded_pos.x + 1);
@@ -241,7 +303,7 @@ impl ImprovedNoise {
             remainder_pos - DVec3::new(1.0, 1.0, 1.0),
         );
         let lx = smoothstep(remainder_pos.x);
-        let ly = smoothstep(remainder_pos.y);
+        let ly = smoothstep(raw_remainder_y);
         let lz = smoothstep(remainder_pos.z);
         lerp3(
             v000,
@@ -256,6 +318,33 @@ impl ImprovedNoise {
         )
     }
 
+    /// Underlying generation method, prefer [`ImprovedNoise::get`] instead.
+    /// This method is only exposed for [`BlendedNoise`].
+    ///
+    /// [`BlendedNoise`]: crate::density_function::ops::BlendedNoise
+    pub fn get_smeared(&self, pos: DVec3, smeared_y: f64, raw_y: f64) -> f64 {
+        let pos = self.offset + pos;
+        let rounded_pos = IVec3::new(floor_i32(pos.x), floor_i32(pos.y), floor_i32(pos.z));
+        let remainder_pos = pos - rounded_pos.as_dvec3();
+        let y_mod = if smeared_y != 0.0 {
+            // FIXME better variable name for d7
+            let d7 = if raw_y >= 0.0 && raw_y < remainder_pos.y {
+                raw_y
+            } else {
+                remainder_pos.y
+            };
+
+            floor_i32(d7 / smeared_y + 1e-7) as f64 * smeared_y
+        } else {
+            0.0
+        };
+        self.sample_and_lerp(
+            rounded_pos,
+            remainder_pos.with_y(remainder_pos.y - y_mod),
+            remainder_pos.y,
+        )
+    }
+
     fn lut(&self, i: i32) -> i32 {
         self.lut[i as usize & 255] as i32
     }
@@ -267,10 +356,7 @@ impl ImprovedNoise {
 
 impl Noise3d for ImprovedNoise {
     fn get(&self, pos: DVec3) -> f64 {
-        let pos = self.offset + pos;
-        let rounded_pos = IVec3::new(floor_i32(pos.x), floor_i32(pos.y), floor_i32(pos.z));
-        let remainder_pos = pos - rounded_pos.as_dvec3();
-        self.sample_and_lerp(rounded_pos, remainder_pos)
+        self.get_smeared(pos, 0.0, 0.0)
     }
 }
 
@@ -280,9 +366,81 @@ pub trait Noise3d {
     fn get(&self, pos: DVec3) -> f64;
 }
 
-pub struct SimplexNoise {}
+pub struct SimplexNoise {
+    lut: [u8; 256],
+}
 
 impl SimplexNoise {
+    pub fn new(rng: &impl Rng) -> Self {
+        // used to generate xo, yo, zo, but these aren't used
+        rng.next_f64();
+        rng.next_f64();
+        rng.next_f64();
+
+        // generate initial lut [0, 1, 2, 3, ...]
+        let mut lut = const {
+            let mut lut = [0u8; 256];
+            let mut i = 0;
+            while i < 256 {
+                lut[i] = i as u8;
+                i += 1;
+            }
+            lut
+        };
+
+        // shuffle lut
+        for i in 0..256 {
+            let j = rng.next_i32_up_to(256 - i as i32) as usize + i;
+            lut.swap(i, j);
+        }
+
+        Self { lut }
+    }
+
+    pub fn get_2d(&self, pos: DVec2) -> f64 {
+        // oh god!?
+        let pos_sum = pos.element_sum() * Self::F2;
+        let floor_pos = IVec2::new(floor_i32(pos.x + pos_sum), floor_i32(pos.y + pos_sum));
+        let floor_sum = floor_pos.element_sum() as f64 * Self::G2;
+        let floor_dev = floor_pos.as_dvec2() - floor_sum;
+        let corner1 = pos - floor_dev;
+        let k = if corner1.x > corner1.y {
+            IVec2::new(1, 0)
+        } else {
+            IVec2::new(0, 1)
+        };
+        let corner2 = corner1 - k.as_dvec2() + Self::G2;
+        let corner3 = corner1 - 1.0 + 2.0 * Self::G2;
+        let i = floor_pos & 255;
+        let grad1 = self.lut(i.x + self.lut(i.y)) % 12;
+        let grad2 = self.lut(i.x + k.x + self.lut(i.y + k.y)) % 12;
+        let grad3 = self.lut(i.x + 1 + self.lut(i.y + 1)) % 12;
+        let noise1 =
+            Self::get_corner_noise_3d(grad1 as usize, DVec3::new(corner1.x, corner1.y, 0.0), 0.5);
+        let noise2 =
+            Self::get_corner_noise_3d(grad2 as usize, DVec3::new(corner2.x, corner2.y, 0.0), 0.5);
+        let noise3 =
+            Self::get_corner_noise_3d(grad3 as usize, DVec3::new(corner3.x, corner3.y, 0.0), 0.5);
+        70.0 * (noise1 + noise2 + noise3)
+    }
+
+    fn lut(&self, i: i32) -> i32 {
+        self.lut[i as usize & 255] as i32
+    }
+
+    fn get_corner_noise_3d(i: usize, pos: DVec3, min: f64) -> f64 {
+        let dist_sq = min - pos.x.powi(2) - pos.y.powi(2) - pos.z.powi(2);
+        if dist_sq < 0.0 {
+            0.0
+        } else {
+            dist_sq.powi(4) * (Self::GRADIENT[i].as_dvec3() * pos).element_sum()
+        }
+    }
+
+    const SQRT_3: f64 = 1.7320508075688772;
+    const F2: f64 = 0.5 * (Self::SQRT_3 - 1.0);
+    const G2: f64 = (3.0 - Self::SQRT_3) / 6.0;
+
     const GRADIENT: [IVec3; 16] = [
         IVec3::new(1, 1, 0),
         IVec3::new(-1, 1, 0),
@@ -305,12 +463,12 @@ impl SimplexNoise {
 
 #[cfg(all(test, feature = "java_tests_module"))]
 mod java_tests {
-    use glam::DVec3;
+    use glam::{DVec2, DVec3};
     use jni::objects::JValue;
 
     use crate::{
         java_tests::{self, Class, DoubleArrayList, get_jvm_env},
-        noise::{ImprovedNoise, Noise3d, PerlinNoise},
+        noise::{ImprovedNoise, Noise3d, PerlinNoise, SimplexNoise},
         random::LegacyRng,
     };
 
@@ -333,6 +491,21 @@ mod java_tests {
                 ImprovedNoise::grad_dot(0, DVec3::new(10.0, -10.0, 123.0)),
                 "i = {i}"
             );
+        }
+    }
+
+    #[test]
+    fn perlin_noise_wrap() {
+        let mut env = get_jvm_env();
+        for i in -10..10 {
+            let i = i as f64 / 4.0;
+            assert_eq!(
+                env.call_static(&java_tests::PerlinNoise::WRAP, &[JValue::Double(i)])
+                    .d()
+                    .unwrap(),
+                PerlinNoise::wrap(i),
+                "i = {i}"
+            )
         }
     }
 
@@ -466,6 +639,41 @@ mod java_tests {
                         "at {x}, {y}, {z}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn simplex_noise() {
+        let mut env = get_jvm_env();
+        let java_rng = env.construct(
+            &Class::LegacyRandomSource,
+            java_tests::RandomSource::CONSTRUCTOR,
+            &[JValue::Long(0)],
+        );
+        let java_simplex_noise = env.construct(
+            &Class::SimplexNoise,
+            java_tests::SimplexNoise::CONSTRUCTOR,
+            &[JValue::Object(&java_rng)],
+        );
+        let rng = LegacyRng::new(0);
+        let simplex_noise = SimplexNoise::new(&rng);
+
+        for x in -10..10 {
+            for y in -10..10 {
+                let x = x as f64 / 2.5;
+                let y = y as f64 / 2.5;
+                assert_more_or_less_eq!(
+                    env.call(
+                        &java_simplex_noise,
+                        &java_tests::SimplexNoise::GET_VALUE_2D,
+                        &[JValue::Double(x), JValue::Double(y)]
+                    )
+                    .d()
+                    .unwrap(),
+                    simplex_noise.get_2d(DVec2::new(x, y)),
+                    "at {x}, {y}"
+                );
             }
         }
     }
