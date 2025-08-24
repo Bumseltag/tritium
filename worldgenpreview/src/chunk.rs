@@ -3,12 +3,19 @@ use std::{hash::BuildHasher, str::FromStr};
 use bevy::{
     asset::RenderAssetUsages,
     log::tracing::instrument,
-    math::{I16Vec3, U16Vec3, Vec2},
+    math::{I16Vec3, I64Vec3, U16Vec3, Vec2},
     platform::{collections::HashMap, hash::FixedHasher},
     prelude::*,
     render::mesh::{Indices, PrimitiveTopology},
 };
 use bitflags::bitflags;
+use libworldgen::{
+    density_function::{
+        FunctionOp,
+        ops::{Add, Noise, YClampedGradient},
+    },
+    random::XoroshiroRng,
+};
 use mcpackloader::{
     ResourceLocation, ResourceParseError,
     blockstates::{
@@ -17,10 +24,11 @@ use mcpackloader::{
     },
     models::{self, BlockModel, Direction, Element, ElementRotation, RotationAxis},
     textures::Texture,
+    worldgen::NoiseParameters,
 };
 
 use crate::{
-    registry::{LoadedResource, Registries, Registry},
+    registry::{LoadedResource, Registries, RegistriesHandle, Registry},
     textures::{ATLAS_SIZE, LoadedTexture},
 };
 
@@ -56,6 +64,58 @@ impl Chunk {
             Block::new(ResourceLocation::air(), Blockstate(HashMap::new())),
             LoadedBlock::new(),
         )
+    }
+
+    #[instrument(skip_all)]
+    pub async fn generate_test_chunk(registries: RegistriesHandle, pos: IVec2) -> Self {
+        let mut palette = [const { Self::air() }; u8::MAX as usize];
+        let stone = Block::new_with_state(ResourceLocation::new_mc("stone"), vec![]);
+        let mut registries = registries.lock().await;
+        palette[1] = stone
+            .into_palette_format(&mut registries)
+            .await
+            .unwrap_or(Self::air());
+        drop(registries);
+        Self {
+            palette,
+            data: Self::generate_test_chunk_data(pos),
+        }
+    }
+
+    #[instrument(skip_all)]
+    pub fn generate_test_chunk_data(pos: IVec2) -> [BlockId; BLOCKS_PER_CHUNK] {
+        let pos = pos * 16;
+        let mut data = [0; BLOCKS_PER_CHUNK];
+        let test_density_fn = Add(
+            Box::new(YClampedGradient {
+                from_y: 70,
+                to_y: 100,
+                from_value: 2.0,
+                to_value: -2.0,
+            }),
+            Box::new(Noise::new(
+                &XoroshiroRng::default(),
+                NoiseParameters {
+                    amplitudes: vec![1.0, 1.0, 1.0],
+                    first_octave: -6,
+                },
+                1.0,
+                0.0,
+            )),
+        );
+        for y_chunk in 0..(CHUNK_HEIGHT / 16) {
+            const CHUNK_SIZE: usize = 16 * 16 * 16;
+            data[(y_chunk * CHUNK_SIZE)..((y_chunk + 1) * CHUNK_SIZE)].copy_from_slice(
+                &test_density_fn
+                    .run_subchunk(&glam::I64Vec3::new(
+                        pos.x as i64,
+                        (y_chunk as i64 * 16) - 64,
+                        pos.y as i64,
+                    ))
+                    .map(|v| (v > 0.0) as u8),
+            );
+        }
+        data
     }
 
     #[instrument(skip_all)]

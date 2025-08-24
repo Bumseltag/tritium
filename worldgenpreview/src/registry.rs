@@ -62,9 +62,9 @@ pub struct ChunkTask {
 }
 
 impl ChunkTask {
-    pub fn create(registries: RegistriesHandle) -> Self {
+    pub fn create(registries: RegistriesHandle, pos: IVec2) -> Self {
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let chunk = Box::new(Chunk::example_chunk(&mut *registries.lock().await).await);
+            let chunk = Box::new(Chunk::generate_test_chunk(registries, pos).await);
             let culled_chunk = CulledChunk::new(chunk);
             culled_chunk.to_mesh().unwrap().to_bevy_mesh()
         });

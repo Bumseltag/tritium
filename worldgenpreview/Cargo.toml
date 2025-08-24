@@ -9,12 +9,14 @@ async-lock = "3.4.1"
 bevy = { version = "0.16.1", features = ["dynamic_linking"] }
 bevy_framepace = "0.19.1"
 bitflags = "2.9.1"
+glam = "0.30.5"
 guillotiere = "0.6.2"
 image = { version = "0.25.6", default-features = false }
 mcpackloader = { path = "../mcpackloader", default-features = false, features = [
     "glam",
     "more_const",
 ] }
+libworldgen = { path = "../libworldgen" }
 memory-stats = "1.2.0"
 tracing = "0.1.41"
 zip = "4.3.0"

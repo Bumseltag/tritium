@@ -1,8 +1,10 @@
 use std::fs;
 use std::time::Duration;
 
+use bevy::app::TaskPoolThreadAssignmentPolicy;
 use bevy::ecs::system::SystemId;
 use bevy::platform::collections::HashSet;
+use bevy::tasks::{AsyncComputeTaskPool, block_on};
 use bevy::window::{PresentMode, WindowResolution, WindowTheme};
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -21,15 +23,28 @@ mod textures;
 fn main() {
     let mut app = App::new();
     app.add_plugins((
-        DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "worldgenpreview".into(),
-                window_theme: Some(WindowTheme::Dark),
-                resolution: WindowResolution::new(1500.0, 800.0),
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "worldgenpreview".into(),
+                    window_theme: Some(WindowTheme::Dark),
+                    resolution: WindowResolution::new(1500.0, 800.0),
+                    ..Default::default()
+                }),
                 ..Default::default()
+            })
+            .set(TaskPoolPlugin {
+                task_pool_options: TaskPoolOptions {
+                    async_compute: TaskPoolThreadAssignmentPolicy {
+                        min_threads: 0,
+                        max_threads: usize::MAX,
+                        percent: 1.0,
+                        on_thread_spawn: None,
+                        on_thread_destroy: None,
+                    },
+                    ..Default::default()
+                },
             }),
-            ..Default::default()
-        }),
         FramepacePlugin,
         FrameTimeDiagnosticsPlugin::default(),
     ))
@@ -101,7 +116,7 @@ pub struct ReloadSystem(SystemId);
 fn reload(
     mut commands: Commands,
     mut state: ResMut<NextState<AppState>>,
-    mut chunk_tasks: Query<&mut ChunkTask>,
+    mut chunk_tasks: Query<(Entity, Option<&mut ChunkTask>), With<ChunkPos>>,
 ) {
     commands.remove_resource::<DynamicTextureAtlas>();
     commands.remove_resource::<LoaderChannels>();
@@ -109,8 +124,12 @@ fn reload(
     commands.init_resource::<DynamicTextureAtlas>();
     state.set(AppState::Loading);
 
-    for mut task in &mut chunk_tasks {
-        task.cancel();
+    for (entity, task) in &mut chunk_tasks {
+        if let Some(mut task) = task {
+            task.cancel();
+        } else {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -151,7 +170,7 @@ fn generate_chunks_around_camera(
     });
 
     for pos in chunks_to_generate {
-        commands.spawn((ChunkTask::create(registries.clone()), ChunkPos(pos)));
+        commands.spawn((ChunkTask::create(registries.clone(), pos), ChunkPos(pos)));
     }
 }
 
@@ -347,7 +366,9 @@ fn update_stats(
     chunks: Query<(), With<ChunkTask>>,
 ) {
     timer.0.tick(time.delta());
+    let span = info_span!("aquire_registries").entered();
     let status = registries.lock_blocking().get_total_status();
+    drop(span);
     for (mut text, id) in &mut dyn_text {
         match (id.0, timer.0.just_finished()) {
             ("fps", true) => {
