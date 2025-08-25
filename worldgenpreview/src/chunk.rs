@@ -3,7 +3,7 @@ use std::{hash::BuildHasher, str::FromStr};
 use bevy::{
     asset::RenderAssetUsages,
     log::tracing::instrument,
-    math::{I16Vec3, I64Vec3, U16Vec3, Vec2},
+    math::{I16Vec3, U16Vec3, Vec2},
     platform::{collections::HashMap, hash::FixedHasher},
     prelude::*,
     render::mesh::{Indices, PrimitiveTopology},
@@ -12,7 +12,7 @@ use bitflags::bitflags;
 use libworldgen::{
     density_function::{
         FunctionOp,
-        ops::{Add, Noise, YClampedGradient},
+        ops::{Add, AddConst, Cube, Mul, Noise, Square, YClampedGradient},
     },
     random::XoroshiroRng,
 };
@@ -67,13 +67,19 @@ impl Chunk {
     }
 
     #[instrument(skip_all)]
-    pub async fn generate_test_chunk(registries: RegistriesHandle, pos: IVec2) -> Self {
+    pub fn generate_test_chunk(registries: RegistriesHandle, pos: IVec2) -> Self {
         let mut palette = [const { Self::air() }; u8::MAX as usize];
+        let mut registries = registries.lock();
         let stone = Block::new_with_state(ResourceLocation::new_mc("stone"), vec![]);
-        let mut registries = registries.lock().await;
         palette[1] = stone
             .into_palette_format(&mut registries)
-            .await
+            .unwrap_or(Self::air());
+        let grass_block = Block::new_with_state(
+            ResourceLocation::new_mc("grass_block"),
+            vec![("snowy".into(), Property::Bool(false))],
+        );
+        palette[2] = grass_block
+            .into_palette_format(&mut registries)
             .unwrap_or(Self::air());
         drop(registries);
         Self {
@@ -85,7 +91,6 @@ impl Chunk {
     #[instrument(skip_all)]
     pub fn generate_test_chunk_data(pos: IVec2) -> [BlockId; BLOCKS_PER_CHUNK] {
         let pos = pos * 16;
-        let mut data = [0; BLOCKS_PER_CHUNK];
         let test_density_fn = Add(
             Box::new(YClampedGradient {
                 from_y: 70,
@@ -103,41 +108,64 @@ impl Chunk {
                 0.0,
             )),
         );
+
+        let mut bin_layers = Vec::with_capacity(16 * 16 * 16 * (CHUNK_HEIGHT / 16) / 64);
         for y_chunk in 0..(CHUNK_HEIGHT / 16) {
-            const CHUNK_SIZE: usize = 16 * 16 * 16;
-            data[(y_chunk * CHUNK_SIZE)..((y_chunk + 1) * CHUNK_SIZE)].copy_from_slice(
-                &test_density_fn
-                    .run_subchunk(&glam::I64Vec3::new(
-                        pos.x as i64,
-                        (y_chunk as i64 * 16) - 64,
-                        pos.y as i64,
-                    ))
-                    .map(|v| (v > 0.0) as u8),
-            );
+            let subchunk_floats = test_density_fn.run_subchunk(&glam::I64Vec3::new(
+                pos.x as i64,
+                (y_chunk as i64 * 16) - 64,
+                pos.y as i64,
+            ));
+            let subchunk = subchunk_floats.chunks_exact(16 * 16).map(|data| {
+                let mut res = [0u64; 4];
+                for (int_i, res_int) in res.iter_mut().enumerate() {
+                    let base_i = int_i * 64;
+                    let mut int = 0;
+                    for i in 0..64 {
+                        int |= ((data[base_i + i] > 0.0) as u64) << i;
+                    }
+                    *res_int = int;
+                }
+                res
+            });
+            bin_layers.extend(subchunk);
+        }
+        let mut data = [0u8; BLOCKS_PER_CHUNK];
+        let mut covered = [0u64; 4];
+        for (y, layer) in bin_layers.iter().enumerate().rev() {
+            let y_data_idx = y * 16 * 16;
+            for i in 0..4 {
+                let i_data_idx = i * 64;
+                for bit in 0..64 {
+                    if layer[i] >> bit & 1 == 1 {
+                        let data_idx = y_data_idx + i_data_idx + bit;
+                        if covered[i] >> bit & 1 == 1 {
+                            data[data_idx] = 1u8;
+                        } else {
+                            data[data_idx] = 2u8;
+                        }
+                    }
+                }
+                covered[i] |= layer[i];
+                covered[i] &= layer[i];
+            }
         }
         data
     }
 
     #[instrument(skip_all)]
-    pub async fn example_chunk(registries: &mut Registries) -> Self {
+    pub fn example_chunk(registries: &mut Registries) -> Self {
         let mut palette = [const { Self::air() }; u8::MAX as usize];
         let stone = Block::new_with_state(ResourceLocation::new_mc("stone"), vec![]);
-        palette[1] = stone
-            .into_palette_format(registries)
-            .await
-            .unwrap_or(Self::air());
+        palette[1] = stone.into_palette_format(registries).unwrap_or(Self::air());
         let dirt = Block::new_with_state(ResourceLocation::new_mc("dirt"), vec![]);
-        palette[2] = dirt
-            .into_palette_format(registries)
-            .await
-            .unwrap_or(Self::air());
+        palette[2] = dirt.into_palette_format(registries).unwrap_or(Self::air());
         let grass_block = Block::new_with_state(
             ResourceLocation::new_mc("grass_block"),
             vec![("snowy".into(), Property::Bool(false))],
         );
         palette[3] = grass_block
             .into_palette_format(registries)
-            .await
             .unwrap_or(Self::air());
 
         let mut data = [0; BLOCKS_PER_CHUNK];
@@ -155,12 +183,10 @@ impl Chunk {
         );
         palette[4] = oak_log
             .into_palette_format(registries)
-            .await
             .unwrap_or(Self::air());
         let oak_leaves = Block::new_with_state(ResourceLocation::new_mc("oak_leaves"), vec![]);
         palette[5] = oak_leaves
             .into_palette_format(registries)
-            .await
             .unwrap_or(Self::air());
         for y in 128..130 {
             for x in 6..11 {
@@ -388,22 +414,21 @@ impl Block {
         }
     }
 
-    pub async fn into_palette_format(
+    pub fn into_palette_format(
         self,
         registries: &mut Registries,
     ) -> Result<(Self, LoadedBlock), ResourceParseError> {
-        let loaded_block = self.load_configured_block(registries).await?;
+        let loaded_block = self.load_configured_block(registries)?;
         Ok((self, loaded_block))
     }
 
     #[instrument(skip_all)]
-    pub async fn load_configured_block(
+    pub fn load_configured_block(
         &self,
         registries: &mut Registries,
     ) -> Result<LoadedBlock, ResourceParseError> {
         let blockstate_file = registries
-            .get_or_load::<BlockstateFile>(&self.name)
-            .await?
+            .get_or_load::<BlockstateFile>(&self.name)?
             .clone();
 
         match blockstate_file {
@@ -425,8 +450,7 @@ impl Block {
                         registries,
                         &self.name,
                         &self.blockstate,
-                    )
-                    .await;
+                    );
                 }
                 Err(format!(
                     "No variant matches in blockstate file for block `{}`, blockstate: {:?}",
@@ -445,15 +469,12 @@ impl Block {
                             )
                         })?;
 
-                        configured_block.add(
-                            LoadedBlock::from_configured_model(
-                                configured_model,
-                                registries,
-                                &self.name,
-                                &self.blockstate,
-                            )
-                            .await?,
-                        );
+                        configured_block.add(LoadedBlock::from_configured_model(
+                            configured_model,
+                            registries,
+                            &self.name,
+                            &self.blockstate,
+                        )?);
                     }
                 }
                 Ok(configured_block)
@@ -482,15 +503,14 @@ impl LoadedBlock {
     }
 
     #[instrument(skip_all)]
-    pub async fn from_configured_model(
+    pub fn from_configured_model(
         configured_model: &ConfiguredModel,
         registries: &mut Registries,
         block_name: &ResourceLocation<BlockstateFile>,
         state: &Blockstate,
     ) -> Result<Self, ResourceParseError> {
         let mut model = registries
-            .get_or_load::<LoadedBlockModel>(&configured_model.model)
-            .await?
+            .get_or_load::<LoadedBlockModel>(&configured_model.model)?
             .clone();
 
         let mesh = model.mesh.as_mut().ok_or_else(|| {
@@ -629,7 +649,7 @@ pub struct LoadedBlockModel {
 impl LoadedResource for LoadedBlockModel {
     type Resource = BlockModel;
 
-    async fn load(
+    fn load(
         res_loc: &ResourceLocation<BlockModel>,
         res: BlockModel,
         registries: &mut Registries,
@@ -638,7 +658,7 @@ impl LoadedResource for LoadedBlockModel {
         let mut textures = HashMap::new();
         let mut full_block = None;
         if let Some(parent) = &res.parent {
-            let parent_model: &LoadedBlockModel = registries.get_or_load(parent).await?;
+            let parent_model: &LoadedBlockModel = registries.get_or_load(parent)?;
             if let Some(parent_mesh) = &parent_model.mesh {
                 mesh = Some(parent_mesh.clone());
                 full_block = Some(parent_model.full_block.unwrap());
@@ -666,9 +686,9 @@ impl LoadedResource for LoadedBlockModel {
             // preload textures
             for texture in model_textures.values() {
                 if !texture.starts_with('#') {
-                    registries
-                        .get_or_load::<LoadedTexture>(&ResourceLocation::from_str(texture).unwrap())
-                        .await?;
+                    registries.get_or_load::<LoadedTexture>(
+                        &ResourceLocation::from_str(texture).unwrap(),
+                    )?;
                 }
             }
         }

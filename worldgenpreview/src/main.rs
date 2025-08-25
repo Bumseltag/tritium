@@ -4,7 +4,6 @@ use std::time::Duration;
 use bevy::app::TaskPoolThreadAssignmentPolicy;
 use bevy::ecs::system::SystemId;
 use bevy::platform::collections::HashSet;
-use bevy::tasks::{AsyncComputeTaskPool, block_on};
 use bevy::window::{PresentMode, WindowResolution, WindowTheme};
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -38,7 +37,7 @@ fn main() {
                     async_compute: TaskPoolThreadAssignmentPolicy {
                         min_threads: 0,
                         max_threads: usize::MAX,
-                        percent: 1.0,
+                        percent: 0.5,
                         on_thread_spawn: None,
                         on_thread_destroy: None,
                     },
@@ -367,7 +366,7 @@ fn update_stats(
 ) {
     timer.0.tick(time.delta());
     let span = info_span!("aquire_registries").entered();
-    let status = registries.lock_blocking().get_total_status();
+    let status = registries.lock().get_total_status();
     drop(span);
     for (mut text, id) in &mut dyn_text {
         match (id.0, timer.0.just_finished()) {

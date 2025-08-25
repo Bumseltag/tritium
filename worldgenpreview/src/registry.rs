@@ -3,11 +3,9 @@ use std::fs::File;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::{any::type_name, env, fs, future::poll_fn, path::PathBuf, str::FromStr, task::Poll};
 
-use async_channel::{Receiver, Sender};
-use async_lock::{Mutex, MutexGuardArc};
 use bevy::platform::hash::FixedHasher;
 use bevy::prelude::*;
 use bevy::tasks::{Task, block_on};
@@ -25,6 +23,7 @@ use bevy::{
     tasks::AsyncComputeTaskPool,
     transform::components::Transform,
 };
+use crossbeam_channel::{self, Receiver, Sender};
 use guillotiere::{AtlasAllocator, euclid::Size2D};
 use image::{DynamicImage, RgbaImage};
 use mcpackloader::{
@@ -43,12 +42,8 @@ use crate::{
 pub struct RegistriesHandle(Arc<Mutex<Registries>>);
 
 impl RegistriesHandle {
-    pub async fn lock(&self) -> MutexGuardArc<Registries> {
-        self.0.lock_arc().await
-    }
-
-    pub fn lock_blocking(&self) -> MutexGuardArc<Registries> {
-        self.0.lock_arc_blocking()
+    pub fn lock(&self) -> MutexGuard<Registries> {
+        self.0.lock().unwrap()
     }
 }
 
@@ -64,7 +59,7 @@ pub struct ChunkTask {
 impl ChunkTask {
     pub fn create(registries: RegistriesHandle, pos: IVec2) -> Self {
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let chunk = Box::new(Chunk::generate_test_chunk(registries, pos).await);
+            let chunk = Box::new(Chunk::generate_test_chunk(registries, pos));
             let culled_chunk = CulledChunk::new(chunk);
             culled_chunk.to_mesh().unwrap().to_bevy_mesh()
         });
@@ -139,7 +134,7 @@ impl ChunkTask {
         }
         let packs = packs.unwrap();
 
-        let (from_loader_send, from_loader_recv) = async_channel::unbounded();
+        let (from_loader_send, from_loader_recv) = crossbeam_channel::unbounded();
         commands.insert_resource(LoaderChannels {
             from_loader: from_loader_recv,
         });
@@ -219,39 +214,38 @@ impl Registries {
         L::get(self).loaded.get(res_loc).map(|v| v.as_ref())
     }
 
-    async fn get_or_insert_with<'a, L: LoadedResource + 'a, F>(
+    fn get_or_insert_with<'a, L: LoadedResource + 'a, F>(
         &'a mut self,
         key: &ResourceLocation<L::Resource>,
         f: F,
     ) -> Result<&'a L, &'a ResourceParseError>
     where
-        F: AsyncFnOnce(&mut Self) -> Result<L, ResourceParseError>,
+        F: FnOnce(&mut Self) -> Result<L, ResourceParseError>,
     {
         if L::get(self).loaded.contains_key(key) {
             L::get(self).loaded[key].as_ref()
         } else if L::get(self).loading.contains(key) {
-            poll_fn(|_| {
+            block_on(poll_fn(|_| {
                 if let Some(val) = L::get(self).loaded.get(key) {
                     Poll::Ready(val.as_ref())
                 } else {
                     Poll::Pending
                 }
-            })
-            .await
+            }))
         } else {
             L::get_mut(self).loading.insert(key.clone());
-            let res = f(self).await;
+            let res = f(self);
             L::get_mut(self).loaded.insert(key.clone(), res);
             L::get_mut(self).loading.remove(key);
             L::get(self).loaded[key].as_ref()
         }
     }
 
-    pub async fn get_or_load<'a, L: LoadedResource + 'a>(
+    pub fn get_or_load<'a, L: LoadedResource + 'a>(
         &'a mut self,
         res_loc: &ResourceLocation<L::Resource>,
     ) -> Result<&'a L, &'a ResourceParseError> {
-        Box::pin(Registry::get_or_load(self, res_loc)).await
+        Registry::get_or_load(self, res_loc)
     }
 
     pub fn get_total_status(&self) -> Status {
@@ -339,7 +333,7 @@ impl<L: LoadedResource> Registry<L> {
         }
     }
 
-    async fn load(
+    fn load(
         registries: &mut Registries,
         res_loc: &ResourceLocation<L::Resource>,
     ) -> Result<L, ResourceParseError> {
@@ -367,7 +361,7 @@ impl<L: LoadedResource> Registry<L> {
         }
 
         if let Some(model) = resource {
-            L::load(res_loc, model, registries).await
+            L::load(res_loc, model, registries)
         } else {
             Err(ResourceParseError::ResourceNotFound(
                 registries
@@ -384,27 +378,25 @@ impl<L: LoadedResource> Registry<L> {
     }
 
     /// Gets a resource from the registry if it exists or loads it into the registry if it doesn't exist yet.
-    pub async fn get_or_load<'a>(
+    pub fn get_or_load<'a>(
         registries: &'a mut Registries,
         res_loc: &ResourceLocation<L::Resource>,
     ) -> Result<&'a L, &'a ResourceParseError>
     where
         L: 'a,
     {
-        registries
-            .get_or_insert_with(res_loc, async |registries| {
-                let res = Self::load(registries, res_loc).await;
-                if let Err(err) = &res {
-                    error!(
-                        "Failed to load resource type {}: {}.\nError: {}",
-                        type_name::<L::Resource>(),
-                        res_loc,
-                        err
-                    );
-                }
-                res
-            })
-            .await
+        registries.get_or_insert_with(res_loc, |registries| {
+            let res = Self::load(registries, res_loc);
+            if let Err(err) = &res {
+                error!(
+                    "Failed to load resource type {}: {}.\nError: {}",
+                    type_name::<L::Resource>(),
+                    res_loc,
+                    err
+                );
+            }
+            res
+        })
     }
 
     pub fn get_status(&self) -> Status {
@@ -435,7 +427,7 @@ pub struct Status {
 pub trait LoadedResource: Sized {
     type Resource: ResourceType;
 
-    async fn load(
+    fn load(
         res_loc: &ResourceLocation<Self::Resource>,
         res: Self::Resource,
         registries: &mut Registries,
@@ -449,7 +441,7 @@ pub trait LoadedResource: Sized {
 impl LoadedResource for BlockstateFile {
     type Resource = Self;
 
-    async fn load(
+    fn load(
         _res_loc: &ResourceLocation<Self::Resource>,
         res: Self::Resource,
         _registries: &mut Registries,

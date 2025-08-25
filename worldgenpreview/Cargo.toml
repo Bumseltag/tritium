@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-async-channel = "2.5.0"
-async-lock = "3.4.1"
 bevy = { version = "0.16.1", features = ["dynamic_linking"] }
 bevy_framepace = "0.19.1"
 bitflags = "2.9.1"
@@ -20,6 +18,7 @@ libworldgen = { path = "../libworldgen" }
 memory-stats = "1.2.0"
 tracing = "0.1.41"
 zip = "4.3.0"
+crossbeam-channel = "0.5.15"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

@@ -18,7 +18,7 @@ pub struct LoadedTexture {
 impl LoadedResource for LoadedTexture {
     type Resource = Texture;
 
-    async fn load(
+    fn load(
         _res_loc: &ResourceLocation<Texture>,
         res: Texture,
         registries: &mut Registries,
@@ -30,7 +30,6 @@ impl LoadedResource for LoadedTexture {
         registries
             .from_loader_send
             .send(FromLoader::LoadTextureIntoAtlas(Box::new(res.sprite)))
-            .await
             .map_err(|err| err.to_string())?;
         let pos = alloc.rectangle.min;
         Ok(LoadedTexture {
