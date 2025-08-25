@@ -23,6 +23,10 @@ fn floor4<T: BitAnd<i64>>(v: T) -> T::Output {
     v & (-1 ^ 3/* = 0b1111...1111100 */)
 }
 
+/// Interpolates at each block in one cell based on the input density function value of some cells around.
+/// The size of each cell is 4x4x4. Used often in combination with [`FlatCache`].
+///
+/// FIXME in vanilla the cell size in `4 * size_horizontal` x `4 * size_vertical` x `4 * size_horizontal`
 pub struct Interpolated(pub Box<dyn FunctionOp>);
 
 impl FunctionOp for Interpolated {
@@ -150,6 +154,8 @@ impl FunctionOp for Interpolated {
     }
 }
 
+/// Calculate the value per 4×4 column (Value at each block in one column is the same).
+/// And it is calculated only once per column, at Y=0. Used often in combination with [`Interpolated`].
 pub struct FlatCache(pub Box<dyn FunctionOp>);
 
 impl FunctionOp for FlatCache {
@@ -178,6 +184,7 @@ impl FunctionOp for FlatCache {
     }
 }
 
+/// Only computes the input density once per horizontal position.
 pub struct Cache2d(Box<dyn FunctionOp>);
 
 impl FunctionOp for Cache2d {
@@ -198,6 +205,9 @@ impl FunctionOp for Cache2d {
     }
 }
 
+/// Samples a legacy [`PerlinNoise`].
+///
+/// The resource location of this is `"minecraft:old_blended_noise"`.
 pub struct BlendedNoise {
     min_limit_noise: PerlinNoise,
     max_limit_noise: PerlinNoise,
@@ -323,6 +333,7 @@ impl FunctionOp for BlendedNoise {
     }
 }
 
+/// Samples a noise.
 pub struct Noise {
     noise: NormalNoise,
     xz_scale: f64,
@@ -346,6 +357,8 @@ impl FunctionOp for Noise {
     }
 }
 
+/// Samples at current position using a noise algorithm used for end islands.
+/// Its minimum value is `−0.84375` and its maximum value is `0.5625`.
 pub struct EndIslands(SimplexNoise);
 
 // only do this once, because holy this is expensive
@@ -401,8 +414,11 @@ impl Default for EndIslands {
     }
 }
 
+/// Specifies the scaling for [`WeirdScalerSampler`].
 pub enum RarityValueMapper {
+    /// The minimum scale is 0.75, and the maximum is 2.0
     Type1,
+    /// The minimum scale is 0.5, and the maximum is 3.0
     Type2,
 }
 
@@ -437,6 +453,8 @@ impl RarityValueMapper {
     }
 }
 
+/// According to the input value, scales and enhances (or weakens) some regions of the specified noise, and then returns the absolute value.
+/// `rarity_value_mapper` can be `"type_1"` or `"type_2"`, see [`RarityValueMapper`].
 pub struct WeirdScalerSampler {
     rarity_value_mapper: RarityValueMapper,
     noise: NormalNoise,
@@ -465,6 +483,7 @@ impl FunctionOp for WeirdScalerSampler {
     }
 }
 
+/// Similar to [`Noise`], but first shifts the input coordinates.
 pub struct ShiftedNoise {
     noise: NormalNoise,
     xz_scale: f64,
@@ -508,6 +527,8 @@ impl FunctionOp for ShiftedNoise {
     }
 }
 
+/// Computes the input value, and depending on that result returns one of two other density functions.
+/// Basically an if-then-else statement.
 pub struct RangeChoice {
     input: Box<dyn FunctionOp>,
     min_inclusive: f64,
@@ -527,6 +548,7 @@ impl FunctionOp for RangeChoice {
     }
 }
 
+/// Samples a noise at `(x/4, 0, z/4)`, then multiplies it by 4.
 pub struct ShiftA(NormalNoise);
 
 impl ShiftA {
@@ -541,6 +563,7 @@ impl FunctionOp for ShiftA {
     }
 }
 
+/// Samples a noise at `(z/4, x/4, 0)`, then multiplies it by 4.
 pub struct ShiftB(NormalNoise);
 
 impl ShiftB {
@@ -551,10 +574,13 @@ impl ShiftB {
 
 impl FunctionOp for ShiftB {
     fn run_once(&self, pos: &I64Vec3) -> f64 {
-        self.0.get(pos.as_dvec3().with_z(0.0) / 4.0) * 4.0
+        self.0
+            .get(DVec3::new(pos.z as f64, pos.x as f64, 0.0) / 4.0)
+            * 4.0
     }
 }
 
+/// Samples a noise at `(x/4, y/4, z/4)`, then multiplies it by 4.
 pub struct Shift(NormalNoise);
 
 impl Shift {
@@ -569,6 +595,7 @@ impl FunctionOp for Shift {
     }
 }
 
+/// Clamps the input between two values.
 pub struct Clamp {
     pub input: Box<dyn FunctionOp>,
     pub min: f64,
@@ -581,6 +608,7 @@ impl FunctionOp for Clamp {
     }
 }
 
+/// Computes a cubic spline. See [`spline::Spline`].
 pub struct Spline {
     pub coordinate: Box<dyn FunctionOp>,
     pub spline: spline::Spline,
@@ -592,6 +620,7 @@ impl FunctionOp for Spline {
     }
 }
 
+/// A constant value.
 pub struct Constant(pub f64);
 
 impl FunctionOp for Constant {
@@ -600,6 +629,7 @@ impl FunctionOp for Constant {
     }
 }
 
+/// Clamps the Y coordinate between `from_y` and `to_y` and then linearly maps it to a range.
 pub struct YClampedGradient {
     pub from_y: i32,
     pub to_y: i32,
@@ -628,7 +658,9 @@ impl FunctionOp for YClampedGradient {
 }
 
 macro_rules! unit_op {
-    ($name:ident, $res_loc:literal) => {
+    ($docs:literal, $name:ident, $res_loc:literal) => {
+        #[doc = $docs]
+        #[doc = "\n\nNote: This is unimplemented and always returns `0.0`"]
         pub struct $name;
 
         impl FunctionOp for $name {
@@ -653,7 +685,9 @@ macro_rules! unit_op {
 }
 
 macro_rules! marker_op {
-    ($name:ident, $res_loc:literal) => {
+    ($docs:literal, $name:ident, $res_loc:literal) => {
+        #[doc = $docs]
+        #[doc = "\n\nNote: This is unimplemented and just returns the input"]
         pub struct $name(pub Box<dyn FunctionOp>);
 
         impl FunctionOp for $name {
@@ -678,7 +712,8 @@ macro_rules! marker_op {
 }
 
 macro_rules! monadic_op {
-    ($name:ident, $res_loc:literal, $op:expr) => {
+    ($docs:literal, $name:ident, $res_loc:literal, $op:expr) => {
+        #[doc = $docs]
         pub struct $name(pub Box<dyn FunctionOp>);
 
         impl FunctionOp for $name {
@@ -703,7 +738,8 @@ macro_rules! monadic_op {
 }
 
 macro_rules! diadic_op {
-    ($name:ident, $name_const:ident, $res_loc:literal, $op:ident) => {
+    ($docs:literal, $name:ident, $name_const:ident, $res_loc:literal, $op:ident) => {
+        #[doc = $docs]
         pub struct $name(pub Box<dyn FunctionOp>, pub Box<dyn FunctionOp>);
 
         impl FunctionOp for $name {
@@ -763,28 +799,28 @@ macro_rules! diadic_op {
 }
 
 // == UNIMPLEMENTED MARKER FUNCTIONS ==
-marker_op! {CacheOnce, "cache_once"}
-marker_op! {CacheAllInCell, "cache_all_in_cell"}
+marker_op! {"If this density function is referenced twice, it is only computed once per block position.", CacheOnce, "cache_once"}
+marker_op! {"Used by the game onto `final_density` and should not be referenced in data packs. ", CacheAllInCell, "cache_all_in_cell"}
 
 // == MAPPED FUNCTIONS ==
-monadic_op! {Abs, "abs", |v: f64| v.abs()}
-monadic_op! {Square, "square", |v: f64| v.powi(2)}
-monadic_op! {Cube, "cube", |v: f64| v.powi(3)}
-monadic_op! {HalfNegative, "half_negative", |v: f64| if v < 0.0 {v / 2.0} else {v}}
-monadic_op! {QuarterNegative, "quarter_negative", |v: f64| if v < 0.0 {v / 4.0} else {v}}
-monadic_op! {Squeeze, "squeeze", |v: f64| (v / 2.0) * (v * v * v / 24.0)}
+monadic_op! {"Calculates the absolute value of the input density function.", Abs, "abs", |v: f64| v.abs()}
+monadic_op! {"Squares the input. (`x^2`) ", Square, "square", |v: f64| v.powi(2)}
+monadic_op! {"Cubes the input (`x^3`).", Cube, "cube", |v: f64| v.powi(3)}
+monadic_op! {"If the input is negative, returns half of the input. Otherwise returns the input. (`x < 0 ? x/2 : x`)", HalfNegative, "half_negative", |v: f64| if v < 0.0 {v / 2.0} else {v}}
+monadic_op! {"If the input is negative, returns a quarter of the input. Otherwise returns the input. (`x < 0 ? x/4 : x`)", QuarterNegative, "quarter_negative", |v: f64| if v < 0.0 {v / 4.0} else {v}}
+monadic_op! {"First clamps the input between −1 and 1, then transforms it using `x/2 - x*x*x/24`.", Squeeze, "squeeze", |v: f64| (v / 2.0) * (v * v * v / 24.0)}
 
 // == FNS WITH TWO ARGUMENTS ==
-diadic_op! {Add, AddConst, "add", add}
-diadic_op! {Mul, MulConst, "mul", mul}
-diadic_op! {Min, MinConst, "min", min}
-diadic_op! {Max, MaxConst, "max", max}
+diadic_op! {"Adds two density functions together.", Add, AddConst, "add", add}
+diadic_op! {"Multiplies two inputs.", Mul, MulConst, "mul", mul}
+diadic_op! {"Returns the minimum of two inputs.", Min, MinConst, "min", min}
+diadic_op! {"Returns the maximum of two inputs.", Max, MaxConst, "max", max}
 
 // == OTHER UNIMPLEMENTED ==
-unit_op! {BlendAlpha, "blend_alpha"}
-unit_op! {BlendOffset, "blend_offset"}
-marker_op! {BlendDensity, "blend_density"}
-unit_op! {Beardifier, "beardifier"}
+unit_op! {"Used in vanilla for smooth transition to chunks generated in old versions.", BlendAlpha, "blend_alpha"}
+unit_op! {"Used in vanilla for smooth transition to chunks generated in old versions.", BlendOffset, "blend_offset"}
+marker_op! {"Used in vanilla for smooth transition to chunks generated in old versions.", BlendDensity, "blend_density"}
+unit_op! {"Adds beards for structures (see the `terrain_adaptation` field in structures). Its value is added to the `final_density` in noise setting by the game. Should not be referenced in data packs.", Beardifier, "beardifier"}
 
 #[cfg(all(test, feature = "java_tests_module"))]
 mod java_tests {
