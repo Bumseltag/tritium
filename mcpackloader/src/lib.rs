@@ -1,7 +1,8 @@
 use std::{
+    any::type_name,
     borrow::Cow,
     error::Error,
-    fmt::Display,
+    fmt::{Debug, Display},
     hash::Hash,
     io,
     marker::PhantomData,
@@ -20,7 +21,6 @@ pub mod models;
 pub mod textures;
 pub mod worldgen;
 
-#[derive(Debug)]
 pub struct ResourceLocation<T>(UntypedResourceLocation, PhantomData<T>);
 
 impl<T> ResourceLocation<T> {
@@ -91,9 +91,15 @@ impl<T> Clone for ResourceLocation<T> {
     }
 }
 
+impl<T> Debug for ResourceLocation<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ResourceLocation<{}>{{{}}}", type_name::<T>(), self.0)
+    }
+}
+
 impl<T> Display for ResourceLocation<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        write!(f, "{}", self.0)
     }
 }
 
