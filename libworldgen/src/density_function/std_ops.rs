@@ -1077,7 +1077,10 @@ monadic_op! {"Squares the input. (`x^2`) ", Square, "square", |v: f64| v.powi(2)
 monadic_op! {"Cubes the input (`x^3`).", Cube, "cube", |v: f64| v.powi(3)}
 monadic_op! {"If the input is negative, returns half of the input. Otherwise returns the input. (`x < 0 ? x/2 : x`)", HalfNegative, "half_negative", |v: f64| if v < 0.0 {v / 2.0} else {v}}
 monadic_op! {"If the input is negative, returns a quarter of the input. Otherwise returns the input. (`x < 0 ? x/4 : x`)", QuarterNegative, "quarter_negative", |v: f64| if v < 0.0 {v / 4.0} else {v}}
-monadic_op! {"First clamps the input between −1 and 1, then transforms it using `x/2 - x*x*x/24`.", Squeeze, "squeeze", |v: f64| (v / 2.0) * (v * v * v / 24.0)}
+monadic_op! {"First clamps the input between −1 and 1, then transforms it using `x/2 - x*x*x/24`.", Squeeze, "squeeze", |v: f64| {
+    let v = v.clamp(-1.0, 1.0);
+    (v / 2.0) - (v * v * v / 24.0)
+}}
 
 // == FNS WITH TWO ARGUMENTS ==
 diadic_op! {"Adds two density functions together.", Add, AddConst, "add", add}
