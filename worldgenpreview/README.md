@@ -6,7 +6,9 @@ To run it, you must add at least 1 resource pack. This should most likely be the
 You can also add your own resource packs (directories or zip files), and mods.
 
 ```sh
-cargo run -- path/to/my/resourcepack path/to/client.jar
+cargo run -- resources path/to/client.jar
 ```
 
-Note that ordering is important. Earlier resource packs will override later resource packs. That means that you will have to put your `client.jar` last.
+Here we're adding the folder "resources" as a resource pack, which contains data for development and testing.
+Ordering is important here. The same way you can choose the priority of a resource pack in the minecraft pack menu,
+resource packs that are defined earlier will override later ones. That means that you should always put the `client.jar` last.

@@ -11,8 +11,8 @@ use bevy::{
 use bitflags::bitflags;
 use libworldgen::{
     density_function::{
-        FunctionOp,
-        std_ops::{Add, AddConst, Cube, Mul, Noise, Square, YClampedGradient},
+        FunctionOp, from_json,
+        std_ops::{Add, Noise, YClampedGradient},
     },
     random::XoroshiroRng,
 };
@@ -24,11 +24,11 @@ use mcpackloader::{
     },
     models::{self, BlockModel, Direction, Element, ElementRotation, RotationAxis},
     textures::Texture,
-    worldgen::NoiseParameters,
+    worldgen::{DensityFunction, NoiseParameters},
 };
 
 use crate::{
-    registry::{LoadedResource, Registries, RegistriesHandle, Registry},
+    registry::{LoadedResource, Registries, RegistriesHandle, Registry, RegistryResource},
     textures::{ATLAS_SIZE, LoadedTexture},
 };
 
@@ -72,46 +72,37 @@ impl Chunk {
         let mut registries = registries.lock();
         let stone = Block::new_with_state(ResourceLocation::new_mc("stone"), vec![]);
         palette[1] = stone
-            .into_palette_format(&mut registries)
+            .into_palette_format(registries.as_mut())
             .unwrap_or(Self::air());
         let grass_block = Block::new_with_state(
             ResourceLocation::new_mc("grass_block"),
             vec![("snowy".into(), Property::Bool(false))],
         );
         palette[2] = grass_block
-            .into_palette_format(&mut registries)
+            .into_palette_format(registries.as_mut())
             .unwrap_or(Self::air());
+
+        let df = registries
+            .get_or_load::<DensityFunction>(&ResourceLocation::new("worldgenpreview", "test"))
+            .unwrap();
+        let df = from_json(&df.0, &mut registries).unwrap();
         drop(registries);
         Self {
             palette,
-            data: Self::generate_test_chunk_data(pos),
+            data: Self::generate_test_chunk_data(pos, df),
         }
     }
 
     #[instrument(skip_all)]
-    pub fn generate_test_chunk_data(pos: IVec2) -> [BlockId; BLOCKS_PER_CHUNK] {
+    pub fn generate_test_chunk_data(
+        pos: IVec2,
+        df: Box<dyn FunctionOp>,
+    ) -> [BlockId; BLOCKS_PER_CHUNK] {
         let pos = pos * 16;
-        let test_density_fn = Add(
-            Box::new(YClampedGradient {
-                from_y: 70,
-                to_y: 100,
-                from_value: 2.0,
-                to_value: -2.0,
-            }),
-            Box::new(Noise::new(
-                &XoroshiroRng::default(),
-                NoiseParameters {
-                    amplitudes: vec![1.0, 1.0, 1.0],
-                    first_octave: -6,
-                },
-                1.0,
-                0.0,
-            )),
-        );
 
         let mut bin_layers = Vec::with_capacity(16 * 16 * 16 * (CHUNK_HEIGHT / 16) / 64);
         for y_chunk in 0..(CHUNK_HEIGHT / 16) {
-            let subchunk_floats = test_density_fn.run_subchunk(&glam::I64Vec3::new(
+            let subchunk_floats = df.run_subchunk(&glam::I64Vec3::new(
                 pos.x as i64,
                 (y_chunk as i64 * 16) - 64,
                 pos.y as i64,
@@ -699,7 +690,9 @@ impl LoadedResource for LoadedBlockModel {
             full_block,
         })
     }
+}
 
+impl RegistryResource for LoadedBlockModel {
     fn get(registries: &Registries) -> &Registry<Self> {
         &registries.models
     }

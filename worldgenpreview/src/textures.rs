@@ -9,7 +9,7 @@ use bevy::{
 use guillotiere::Size;
 use mcpackloader::{ResourceLocation, ResourceParseError, textures::Texture};
 
-use crate::registry::{FromLoader, LoadedResource, Registries, Registry};
+use crate::registry::{FromLoader, LoadedResource, Registries, Registry, RegistryResource};
 
 pub struct LoadedTexture {
     pub atlas_pos: Vec2,
@@ -36,7 +36,9 @@ impl LoadedResource for LoadedTexture {
             atlas_pos: Vec2::new(pos.x as f32, pos.y as f32),
         })
     }
+}
 
+impl RegistryResource for LoadedTexture {
     fn get(registries: &Registries) -> &Registry<Self> {
         &registries.textures
     }

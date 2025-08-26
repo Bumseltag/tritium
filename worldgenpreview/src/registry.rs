@@ -1,8 +1,11 @@
+use std::any::Any;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::io;
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
+use std::result::Result;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::{any::type_name, env, fs, future::poll_fn, path::PathBuf, str::FromStr, task::Poll};
 
@@ -26,6 +29,9 @@ use bevy::{
 use crossbeam_channel::{self, Receiver, Sender};
 use guillotiere::{AtlasAllocator, euclid::Size2D};
 use image::{DynamicImage, RgbaImage};
+use libworldgen::density_function::std_ops::register_std_ops;
+use libworldgen::registry::ResourceLoader;
+use mcpackloader::worldgen::{DensityFunction, NoiseParameters};
 use mcpackloader::{
     ResourceLocation, ResourceParseError, ResourceType, blockstates::BlockstateFile,
 };
@@ -39,11 +45,54 @@ use crate::{
 };
 
 #[derive(Resource, Clone)]
-pub struct RegistriesHandle(Arc<Mutex<Registries>>);
+pub struct RegistriesHandle(Arc<Mutex<libworldgen::registry::Registries>>);
 
 impl RegistriesHandle {
-    pub fn lock(&self) -> MutexGuard<Registries> {
-        self.0.lock().unwrap()
+    fn new(packs: Vec<PathBuf>, from_loader_send: Sender<FromLoader>) -> Self {
+        let mut reg = libworldgen::registry::Registries::new(Box::new(Registries::new(
+            packs,
+            from_loader_send,
+        )));
+
+        register_std_ops(&mut reg);
+
+        Self(Arc::new(Mutex::new(reg)))
+    }
+
+    pub fn lock(&self) -> RegistryGuard {
+        RegistryGuard(self.0.lock().unwrap())
+    }
+}
+
+pub struct RegistryGuard<'a>(MutexGuard<'a, libworldgen::registry::Registries>);
+
+impl<'a> Deref for RegistryGuard<'a> {
+    type Target = libworldgen::registry::Registries;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> DerefMut for RegistryGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<'a> AsRef<Registries> for RegistryGuard<'a> {
+    fn as_ref(&self) -> &Registries {
+        (self.0.loader.as_ref() as &(dyn Any + Send))
+            .downcast_ref()
+            .unwrap()
+    }
+}
+
+impl<'a> AsMut<Registries> for RegistryGuard<'a> {
+    fn as_mut(&mut self) -> &mut Registries {
+        (self.0.loader.as_mut() as &mut (dyn Any + Send))
+            .downcast_mut()
+            .unwrap()
     }
 }
 
@@ -138,10 +187,7 @@ impl ChunkTask {
         commands.insert_resource(LoaderChannels {
             from_loader: from_loader_recv,
         });
-        commands.insert_resource(RegistriesHandle(Arc::new(Mutex::new(Registries::new(
-            packs,
-            from_loader_send,
-        )))));
+        commands.insert_resource(RegistriesHandle::new(packs, from_loader_send));
         next_state.set(AppState::Main);
     }
 
@@ -207,14 +253,14 @@ impl Registries {
         }
     }
 
-    pub fn get<'a, L: LoadedResource + 'a>(
+    pub fn get<'a, L: RegistryResource + 'a>(
         &'a self,
         res_loc: &ResourceLocation<L::Resource>,
     ) -> Option<Result<&'a L, &'a ResourceParseError>> {
         L::get(self).loaded.get(res_loc).map(|v| v.as_ref())
     }
 
-    fn get_or_insert_with<'a, L: LoadedResource + 'a, F>(
+    fn get_or_insert_with<'a, L: RegistryResource + 'a, F>(
         &'a mut self,
         key: &ResourceLocation<L::Resource>,
         f: F,
@@ -241,7 +287,7 @@ impl Registries {
         }
     }
 
-    pub fn get_or_load<'a, L: LoadedResource + 'a>(
+    pub fn get_or_load<'a, L: RegistryResource + 'a>(
         &'a mut self,
         res_loc: &ResourceLocation<L::Resource>,
     ) -> Result<&'a L, &'a ResourceParseError> {
@@ -257,6 +303,22 @@ impl Registries {
             errs: textures.errs + blockstates.errs + models.errs,
             loading: textures.loading + blockstates.loading + models.loading,
         }
+    }
+}
+
+impl ResourceLoader for Registries {
+    fn load_noise_parameters(
+        &mut self,
+        res_loc: &ResourceLocation<NoiseParameters>,
+    ) -> Result<NoiseParameters, libworldgen::error::Error> {
+        Registry::load(self, res_loc).map_err(|e| e.into())
+    }
+
+    fn load_density_function(
+        &mut self,
+        res_loc: &ResourceLocation<DensityFunction>,
+    ) -> Result<DensityFunction, libworldgen::error::Error> {
+        Registry::load(self, res_loc).map_err(|e| e.into())
     }
 }
 
@@ -326,13 +388,6 @@ pub struct Registry<L: LoadedResource> {
 }
 
 impl<L: LoadedResource> Registry<L> {
-    pub fn new() -> Self {
-        Self {
-            loaded: HashMap::new(),
-            loading: HashSet::new(),
-        }
-    }
-
     fn load(
         registries: &mut Registries,
         res_loc: &ResourceLocation<L::Resource>,
@@ -374,6 +429,15 @@ impl<L: LoadedResource> Registry<L> {
                     })
                     .collect(),
             ))
+        }
+    }
+}
+
+impl<L: RegistryResource> Registry<L> {
+    pub fn new() -> Self {
+        Self {
+            loaded: HashMap::new(),
+            loading: HashSet::new(),
         }
     }
 
@@ -424,6 +488,12 @@ pub struct Status {
     pub loading: usize,
 }
 
+pub trait RegistryResource: LoadedResource {
+    fn get(registries: &Registries) -> &Registry<Self>;
+
+    fn get_mut(registries: &mut Registries) -> &mut Registry<Self>;
+}
+
 pub trait LoadedResource: Sized {
     type Resource: ResourceType;
 
@@ -432,15 +502,10 @@ pub trait LoadedResource: Sized {
         res: Self::Resource,
         registries: &mut Registries,
     ) -> Result<Self, ResourceParseError>;
-
-    fn get(registries: &Registries) -> &Registry<Self>;
-
-    fn get_mut(registries: &mut Registries) -> &mut Registry<Self>;
 }
 
-impl LoadedResource for BlockstateFile {
+impl<T: ResourceType> LoadedResource for T {
     type Resource = Self;
-
     fn load(
         _res_loc: &ResourceLocation<Self::Resource>,
         res: Self::Resource,
@@ -448,7 +513,9 @@ impl LoadedResource for BlockstateFile {
     ) -> Result<Self, ResourceParseError> {
         Ok(res)
     }
+}
 
+impl RegistryResource for BlockstateFile {
     fn get(registries: &Registries) -> &Registry<Self> {
         &registries.blockstates
     }

@@ -366,7 +366,7 @@ fn update_stats(
 ) {
     timer.0.tick(time.delta());
     let span = info_span!("aquire_registries").entered();
-    let status = registries.lock().get_total_status();
+    let status = registries.lock().as_ref().get_total_status();
     drop(span);
     for (mut text, id) in &mut dyn_text {
         match (id.0, timer.0.just_finished()) {
