@@ -8,6 +8,7 @@ use crate::{ResourceLocation, ResourceType};
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct NoiseParameters {
     pub amplitudes: Vec<f64>,
+    #[serde(rename = "firstOctave")]
     pub first_octave: i32,
 }
 
