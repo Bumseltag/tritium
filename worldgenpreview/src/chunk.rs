@@ -12,7 +12,7 @@ use bitflags::bitflags;
 use libworldgen::{
     density_function::{
         FunctionOp,
-        ops::{Add, AddConst, Cube, Mul, Noise, Square, YClampedGradient},
+        std_ops::{Add, AddConst, Cube, Mul, Noise, Square, YClampedGradient},
     },
     random::XoroshiroRng,
 };

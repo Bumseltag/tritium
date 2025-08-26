@@ -149,6 +149,11 @@ impl<T> FromStr for ResourceLocation<T> {
     }
 }
 
+// the compiler automatically adds a trait bound of `T: Send` and `T: Sync`,
+// but we want to override those.
+unsafe impl<T> Send for ResourceLocation<T> {}
+unsafe impl<T> Sync for ResourceLocation<T> {}
+
 // #[derive(Debug, Clone, PartialEq, Eq)]
 // enum MaybeOwnedStr {
 //     Owned(String),

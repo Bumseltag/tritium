@@ -153,7 +153,7 @@ impl PerlinNoise {
     /// - if `octaves` is empty
     /// - if octaves isn't sorted in ascending order (may only panic sometimes)
     ///
-    /// [`BlendedNoise`]: crate::density_function::ops::BlendedNoise
+    /// [`BlendedNoise`]: crate::density_function::std_ops::BlendedNoise
     pub fn create_for_blended_noise(rng: &impl Rng, octaves: &[i32]) -> Self {
         let (first_octave, amplitudes) = Self::make_amplitudes(octaves);
         Self::new(rng, first_octave, amplitudes, PerlinNoiseMode::Legacy)
@@ -321,7 +321,7 @@ impl ImprovedNoise {
     /// Underlying generation method, prefer [`ImprovedNoise::get`] instead.
     /// This method is only exposed for [`BlendedNoise`].
     ///
-    /// [`BlendedNoise`]: crate::density_function::ops::BlendedNoise
+    /// [`BlendedNoise`]: crate::density_function::std_ops::BlendedNoise
     pub fn get_smeared(&self, pos: DVec3, smeared_y: f64, raw_y: f64) -> f64 {
         let pos = self.offset + pos;
         let rounded_pos = IVec3::new(floor_i32(pos.x), floor_i32(pos.y), floor_i32(pos.z));

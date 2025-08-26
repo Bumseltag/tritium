@@ -4,8 +4,12 @@
 //! - `CubicSpline` -> [`SplineValue`]
 //! - `MultiPoint` -> [`Spline`]
 
+use serde::Deserialize;
+
 use crate::helpers::lerp_f32;
 
+#[derive(Deserialize)]
+#[serde(untagged)]
 pub enum SplineValue {
     Constant(f32),
     SubSpline(Spline),
@@ -21,6 +25,7 @@ impl SplineValue {
 }
 
 /// A point of a cubic spline.
+#[derive(Deserialize)]
 pub struct Point {
     pub location: f32,
     pub value: SplineValue,
@@ -32,6 +37,7 @@ pub struct Point {
 /// A spline consists of some [`Point`]s that each have an x coordinate (`location`), y coordinate (`value`) and a derivative.
 /// `value` can also be itself a Spline ([`SplineValue::SubSpline`]),
 /// in which case it will get interpolated in some weird fashion.
+#[derive(Deserialize)]
 pub struct Spline {
     pub points: Vec<Point>,
 }

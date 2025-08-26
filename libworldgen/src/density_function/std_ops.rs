@@ -2,19 +2,63 @@
 
 use std::{
     ops::{Add as _, BitAnd, Mul as _},
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
 };
 
 use glam::{DVec3, I64Vec3, IVec2, Vec3Swizzles};
 use mcpackloader::{ResourceLocation, worldgen::NoiseParameters};
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::{
-    density_function::{FunctionOp, FunctionOpType, NonDynFunctionOp, SUBCHUNK_SIZE},
+    density_function::{
+        DiadicOp, FromJson, FunctionOp, JsonOp, MonadicOp, SUBCHUNK_SIZE, UnitOp, from_json,
+        register_op,
+    },
+    error::Error,
     helpers::{clamped_lerp, lerp, lerp3},
     noise::{Noise3d, NormalNoise, PerlinNoise, SimplexNoise},
     random::{LegacyRng, Rng, XoroshiroRng},
+    registry::Registries,
     spline,
 };
+
+use super::DynFnOpType;
+
+/// Registers all of the standard Minecraft density function operations to the given [`Registries`].
+pub fn register_std_ops(reg: &mut Registries) {
+    register_op(reg, MonadicOp::new_mc(Interpolated, "interpolated"));
+    register_op(reg, MonadicOp::new_mc(FlatCache, "flat_cache"));
+    register_op(reg, MonadicOp::new_mc(Cache2d, "cache_2d"));
+    register_op(reg, MonadicOp::new_mc(CacheOnce, "cache_once"));
+    register_op(reg, MonadicOp::new_mc(CacheAllInCell, "cache_all_in_cell"));
+    register_op(reg, MonadicOp::new_mc(Abs, "abs"));
+    register_op(reg, MonadicOp::new_mc(Square, "square"));
+    register_op(reg, MonadicOp::new_mc(Cube, "cube"));
+    register_op(reg, MonadicOp::new_mc(HalfNegative, "half_negative"));
+    register_op(reg, MonadicOp::new_mc(QuarterNegative, "quarter_negative"));
+    register_op(reg, MonadicOp::new_mc(Squeeze, "squeeze"));
+    register_op(reg, DiadicOp::new_mc(Add, "add"));
+    register_op(reg, DiadicOp::new_mc(Mul, "mul"));
+    register_op(reg, DiadicOp::new_mc(Min, "min"));
+    register_op(reg, DiadicOp::new_mc(Max, "max"));
+    register_op(reg, UnitOp::new_mc(|| BlendAlpha, "blend_alpha"));
+    register_op(reg, UnitOp::new_mc(|| BlendOffset, "blend_offset"));
+    register_op(reg, MonadicOp::new_mc(BlendDensity, "blend_density"));
+    register_op(reg, JsonOp::<BlendedNoise>::new());
+    register_op(reg, JsonOp::<Noise>::new());
+    register_op(reg, UnitOp::new_mc(EndIslands::new, "end_islands"));
+    register_op(reg, JsonOp::<WeirdScalerSampler>::new());
+    register_op(reg, JsonOp::<ShiftedNoise>::new());
+    register_op(reg, JsonOp::<RangeChoice>::new());
+    register_op(reg, JsonOp::<ShiftA>::new());
+    register_op(reg, JsonOp::<ShiftB>::new());
+    register_op(reg, JsonOp::<Shift>::new());
+    register_op(reg, JsonOp::<Clamp>::new());
+    register_op(reg, JsonOp::<Spline>::new());
+    register_op(reg, JsonOp::<Constant>::new());
+    register_op(reg, JsonOp::<YClampedGradient>::new());
+}
 
 /// Rounds the number to the nearest lower multiple of 4.
 ///
@@ -333,6 +377,33 @@ impl FunctionOp for BlendedNoise {
     }
 }
 
+impl FromJson for BlendedNoise {
+    const RES_LOC: ResourceLocation<DynFnOpType> =
+        ResourceLocation::new_static_mc("old_blended_noise");
+
+    type Json = BlendedNoiseJson;
+
+    fn from_json(json: Self::Json, _reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        Ok(Self::create_unseeded(
+            json.xz_scale,
+            json.y_scale,
+            json.xz_factor,
+            json.y_factor,
+            json.smear_scale_multiplier,
+        ))
+    }
+}
+
+/// The JSON representation of [`BlendedNoise`]
+#[derive(Deserialize)]
+pub struct BlendedNoiseJson {
+    xz_scale: f64,
+    y_scale: f64,
+    xz_factor: f64,
+    y_factor: f64,
+    smear_scale_multiplier: f64,
+}
+
 /// Samples a noise.
 pub struct Noise {
     noise: NormalNoise,
@@ -355,6 +426,26 @@ impl FunctionOp for Noise {
         self.noise
             .get(pos.as_dvec3() * DVec3::new(self.xz_scale, self.y_scale, self.xz_scale))
     }
+}
+
+impl FromJson for Noise {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("noise");
+
+    type Json = NoiseJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        let parameters = reg.get_or_load(&json.noise)?.as_ref().clone();
+        let rng = XoroshiroRng::new(0); // FIXME use the actual seed
+        Ok(Self::new(&rng, parameters, json.xz_scale, json.y_scale))
+    }
+}
+
+/// The JSON representation of [`Noise`]
+#[derive(Deserialize)]
+pub struct NoiseJson {
+    noise: ResourceLocation<NoiseParameters>,
+    xz_scale: f64,
+    y_scale: f64,
 }
 
 /// Samples at current position using a noise algorithm used for end islands.
@@ -415,10 +506,13 @@ impl Default for EndIslands {
 }
 
 /// Specifies the scaling for [`WeirdScalerSampler`].
+#[derive(Deserialize)]
 pub enum RarityValueMapper {
     /// The minimum scale is 0.75, and the maximum is 2.0
+    #[serde(rename = "type_1")]
     Type1,
     /// The minimum scale is 0.5, and the maximum is 3.0
+    #[serde(rename = "type_2")]
     Type2,
 }
 
@@ -483,6 +577,32 @@ impl FunctionOp for WeirdScalerSampler {
     }
 }
 
+impl FromJson for WeirdScalerSampler {
+    const RES_LOC: ResourceLocation<DynFnOpType> =
+        ResourceLocation::new_static_mc("weird_scaler_sampler");
+
+    type Json = WeirdScalerSamplerJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        let parameters = reg.get_or_load(&json.noise)?.as_ref().clone();
+        let rng = XoroshiroRng::new(0); // FIXME use the actual seed
+        Ok(Self::new(
+            &rng,
+            json.rarity_value_mapper,
+            parameters,
+            from_json(&json.input, reg)?,
+        ))
+    }
+}
+
+/// The JSON representation of [`WeirdScalerSampler`]
+#[derive(Deserialize)]
+pub struct WeirdScalerSamplerJson {
+    rarity_value_mapper: RarityValueMapper,
+    noise: ResourceLocation<NoiseParameters>,
+    input: Value,
+}
+
 /// Similar to [`Noise`], but first shifts the input coordinates.
 pub struct ShiftedNoise {
     noise: NormalNoise,
@@ -527,6 +647,37 @@ impl FunctionOp for ShiftedNoise {
     }
 }
 
+impl FromJson for ShiftedNoise {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("shifted_noise");
+
+    type Json = ShiftedNoiseJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        let parameters = reg.get_or_load(&json.noise)?.as_ref().clone();
+        let rng = XoroshiroRng::new(0); // FIXME use the actual seed
+        Ok(Self::new(
+            &rng,
+            parameters,
+            json.xz_scale,
+            json.y_scale,
+            from_json(&json.shift_x, reg)?,
+            from_json(&json.shift_y, reg)?,
+            from_json(&json.shift_z, reg)?,
+        ))
+    }
+}
+
+/// The JSON representation of [`ShiftedNoise`]
+#[derive(Deserialize)]
+pub struct ShiftedNoiseJson {
+    noise: ResourceLocation<NoiseParameters>,
+    xz_scale: f64,
+    y_scale: f64,
+    shift_x: Value,
+    shift_y: Value,
+    shift_z: Value,
+}
+
 /// Computes the input value, and depending on that result returns one of two other density functions.
 /// Basically an if-then-else statement.
 pub struct RangeChoice {
@@ -548,6 +699,32 @@ impl FunctionOp for RangeChoice {
     }
 }
 
+impl FromJson for RangeChoice {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("range_choice");
+
+    type Json = RangeChoiceJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        Ok(Self {
+            input: from_json(&json.input, reg)?,
+            min_inclusive: json.min_inclusive,
+            max_exclusive: json.max_exclusive,
+            when_in_range: from_json(&json.when_in_range, reg)?,
+            when_out_of_range: from_json(&json.when_out_of_range, reg)?,
+        })
+    }
+}
+
+/// The JSON representation of [`RangeChoice`]
+#[derive(Deserialize)]
+pub struct RangeChoiceJson {
+    input: Value,
+    min_inclusive: f64,
+    max_exclusive: f64,
+    when_in_range: Value,
+    when_out_of_range: Value,
+}
+
 /// Samples a noise at `(x/4, 0, z/4)`, then multiplies it by 4.
 pub struct ShiftA(NormalNoise);
 
@@ -560,6 +737,18 @@ impl ShiftA {
 impl FunctionOp for ShiftA {
     fn run_once(&self, pos: &I64Vec3) -> f64 {
         self.0.get(pos.as_dvec3().with_y(0.0) / 4.0) * 4.0
+    }
+}
+
+impl FromJson for ShiftA {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("shift_a");
+
+    type Json = ShiftJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        let parameters = reg.get_or_load(&json.argument)?.as_ref().clone();
+        let rng = XoroshiroRng::new(0); // FIXME use the actual seed
+        Ok(Self::new(&rng, parameters))
     }
 }
 
@@ -580,6 +769,18 @@ impl FunctionOp for ShiftB {
     }
 }
 
+impl FromJson for ShiftB {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("shift_b");
+
+    type Json = ShiftJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        let parameters = reg.get_or_load(&json.argument)?.as_ref().clone();
+        let rng = XoroshiroRng::new(0); // FIXME use the actual seed
+        Ok(Self::new(&rng, parameters))
+    }
+}
+
 /// Samples a noise at `(x/4, y/4, z/4)`, then multiplies it by 4.
 pub struct Shift(NormalNoise);
 
@@ -595,6 +796,24 @@ impl FunctionOp for Shift {
     }
 }
 
+impl FromJson for Shift {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("shift");
+
+    type Json = ShiftJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        let parameters = reg.get_or_load(&json.argument)?.as_ref().clone();
+        let rng = XoroshiroRng::new(0); // FIXME use the actual seed
+        Ok(Self::new(&rng, parameters))
+    }
+}
+
+/// The JSON representation of [`ShiftA`], [`ShiftB`] and [`Shift`]
+#[derive(Deserialize)]
+pub struct ShiftJson {
+    argument: ResourceLocation<NoiseParameters>,
+}
+
 /// Clamps the input between two values.
 pub struct Clamp {
     pub input: Box<dyn FunctionOp>,
@@ -606,6 +825,28 @@ impl FunctionOp for Clamp {
     fn run_once(&self, pos: &I64Vec3) -> f64 {
         self.input.run_once(pos).clamp(self.min, self.max)
     }
+}
+
+impl FromJson for Clamp {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("clamp");
+
+    type Json = ClampJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        Ok(Self {
+            input: from_json(&json.input, reg)?,
+            min: json.min,
+            max: json.max,
+        })
+    }
+}
+
+/// The JSON representation of [`Clamp`]
+#[derive(Deserialize)]
+pub struct ClampJson {
+    input: Value,
+    min: f64,
+    max: f64,
 }
 
 /// Computes a cubic spline. See [`spline::Spline`].
@@ -620,6 +861,26 @@ impl FunctionOp for Spline {
     }
 }
 
+impl FromJson for Spline {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("clamp");
+
+    type Json = SplineJson;
+
+    fn from_json(json: Self::Json, reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        Ok(Self {
+            coordinate: from_json(&json.coordinate, reg)?,
+            spline: json.spline,
+        })
+    }
+}
+
+/// The JSON representation of [`Spline`]
+#[derive(Deserialize)]
+pub struct SplineJson {
+    coordinate: Value,
+    spline: spline::Spline,
+}
+
 /// A constant value.
 pub struct Constant(pub f64);
 
@@ -629,7 +890,24 @@ impl FunctionOp for Constant {
     }
 }
 
+impl FromJson for Constant {
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("constant");
+
+    type Json = ConstantJson;
+
+    fn from_json(json: Self::Json, _reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        Ok(Self(json.argument))
+    }
+}
+
+/// The JSON representation of [`Constant`]
+#[derive(Deserialize)]
+pub struct ConstantJson {
+    argument: f64,
+}
+
 /// Clamps the Y coordinate between `from_y` and `to_y` and then linearly maps it to a range.
+#[derive(Deserialize)]
 pub struct YClampedGradient {
     pub from_y: i32,
     pub to_y: i32,
@@ -657,6 +935,17 @@ impl FunctionOp for YClampedGradient {
     }
 }
 
+impl FromJson for YClampedGradient {
+    const RES_LOC: ResourceLocation<DynFnOpType> =
+        ResourceLocation::new_static_mc("y_clamped_gradient");
+
+    type Json = Self;
+
+    fn from_json(json: Self::Json, _reg: &mut Registries) -> Result<Self, Arc<Error>> {
+        Ok(json)
+    }
+}
+
 macro_rules! unit_op {
     ($docs:literal, $name:ident, $res_loc:literal) => {
         #[doc = $docs]
@@ -675,11 +964,6 @@ macro_rules! unit_op {
             fn run_subchunk(&self, _pos: &I64Vec3) -> [f64; SUBCHUNK_SIZE] {
                 [0.0; SUBCHUNK_SIZE]
             }
-        }
-
-        impl NonDynFunctionOp for $name {
-            const NAME: ResourceLocation<FunctionOpType> =
-                ResourceLocation::new_static_mc($res_loc);
         }
     };
 }
@@ -703,11 +987,6 @@ macro_rules! marker_op {
                 self.0.run_subchunk(pos)
             }
         }
-
-        impl NonDynFunctionOp for $name {
-            const NAME: ResourceLocation<FunctionOpType> =
-                ResourceLocation::new_static_mc($res_loc);
-        }
     };
 }
 
@@ -728,11 +1007,6 @@ macro_rules! monadic_op {
             fn run_subchunk(&self, pos: &I64Vec3) -> [f64; SUBCHUNK_SIZE] {
                 self.0.run_subchunk(pos).map($op)
             }
-        }
-
-        impl NonDynFunctionOp for $name {
-            const NAME: ResourceLocation<FunctionOpType> =
-                ResourceLocation::new_static_mc($res_loc);
         }
     };
 }
@@ -773,11 +1047,6 @@ macro_rules! diadic_op {
                 }
                 res
             }
-        }
-
-        impl NonDynFunctionOp for $name {
-            const NAME: ResourceLocation<FunctionOpType> =
-                ResourceLocation::new_static_mc($res_loc);
         }
 
         pub struct $name_const(pub Box<dyn FunctionOp>, pub f64);

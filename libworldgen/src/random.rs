@@ -442,7 +442,7 @@ impl RngFactory for XoroshiroRngFacory {
     }
 }
 
-/// The Xoroshiro128++ PRNG, See https://prng.di.unimi.it/xoroshiro128plusplus.c
+/// The Xoroshiro128++ PRNG, See <https://prng.di.unimi.it/xoroshiro128plusplus.c>
 #[derive(Debug, Clone)]
 pub struct Xoroshiro128PlusPlus {
     seed_lo: u64,

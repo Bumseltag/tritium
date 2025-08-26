@@ -20,10 +20,11 @@ macro_rules! assert_more_or_less_eq {
 }
 
 pub mod density_function;
+pub mod error;
 mod helpers;
 #[cfg(all(test, feature = "java_tests_module"))]
 mod java_tests;
 pub mod noise;
 pub mod random;
 pub mod registry;
-mod spline;
+pub mod spline;
