@@ -1034,7 +1034,7 @@ impl Vertex {
 
     pub fn rotate(&mut self, by: &ElementRotation) {
         let angle_rad = by.angle.to_radians();
-        let origin: Vec3 = by.origin.to_glam();
+        let origin = by.origin.to_glam();
 
         let (sin, cos) = angle_rad.sin_cos();
 
