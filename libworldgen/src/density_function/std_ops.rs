@@ -862,7 +862,7 @@ impl FunctionOp for Spline {
 }
 
 impl FromJson for Spline {
-    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("clamp");
+    const RES_LOC: ResourceLocation<DynFnOpType> = ResourceLocation::new_static_mc("spline");
 
     type Json = SplineJson;
 
