@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 
 use hashbrown::HashMap;
 use mcpackloader::{
@@ -8,35 +8,23 @@ use mcpackloader::{
 
 use crate::{density_function::DynFnOpType, error::Error};
 
-// pub trait Registry {
-//     type Error: Error + From<String> + ToOwned<Owned = Self::Error>;
-//     fn get_noise_params(
-//         &mut self,
-//         res: &ResourceLocation<NoiseParameters>,
-//     ) -> Result<&NoiseParameters, &Self::Error>;
-//     fn get_density_function(
-//         &mut self,
-//         res: &ResourceLocation<DensityFunction>,
-//     ) -> Result<Arc<DensityFunction>, Arc<Self::Error>>;
-//     fn register_function_op_type(
-//         &mut self,
-//         res: ResourceLocation<DynFnOpType<Self>>,
-//         value: DynFnOpType<Self>,
-//     );
-//     fn get_function_op_type<'a>(
-//         &self,
-//         res: &ResourceLocation<DynFnOpType<Self>>,
-//     ) -> Option<&'a dyn FunctionOpType<Self>>;
-// }
-
 pub struct Registries {
     noise_params: MutRegistry<NoiseParameters>,
     density_function: MutRegistry<DensityFunction>,
     density_function_ops: MutRegistry<DynFnOpType>,
-    pub loader: Box<dyn ResourceLoader>,
+    pub loader: Box<dyn ResourceLoader + Send + Sync>,
 }
 
 impl Registries {
+    pub fn new(loader: Box<dyn ResourceLoader + Send + Sync>) -> Self {
+        Self {
+            noise_params: MutRegistry::new(),
+            density_function: MutRegistry::new(),
+            density_function_ops: MutRegistry::new(),
+            loader,
+        }
+    }
+
     pub fn get<T: RegistryType>(&self, res_loc: &ResourceLocation<T>) -> Option<Arc<T>> {
         T::get(self).get(res_loc)
     }
@@ -131,7 +119,7 @@ impl<T: RegistryType> Default for MutRegistry<T> {
     }
 }
 
-pub trait ResourceLoader {
+pub trait ResourceLoader: Any {
     fn load_noise_parameters(
         &mut self,
         res_loc: &ResourceLocation<NoiseParameters>,

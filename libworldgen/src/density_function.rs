@@ -14,7 +14,7 @@ pub mod std_ops;
 
 pub const SUBCHUNK_SIZE: usize = 16 * 16 * 16;
 
-pub trait FunctionOp {
+pub trait FunctionOp: Send + Sync {
     fn run_once(&self, pos: &I64Vec3) -> f64;
     fn run_plane(&self, pos: &I64Vec3) -> [f64; 16 * 16] {
         let mut res = [f64::NAN; 16 * 16];
@@ -49,7 +49,7 @@ pub trait FunctionOpType {
     ) -> Result<Box<dyn FunctionOp>, Arc<Error>>;
 }
 
-pub type DynFnOpType = Box<dyn FunctionOpType>;
+pub type DynFnOpType = Box<dyn FunctionOpType + Send + Sync>;
 
 /// Creates a new [`Error::JsonError`] from a string, wrapped in an [`Arc`].
 fn json_err(text: impl Into<String>) -> Arc<Error> {
@@ -88,7 +88,7 @@ pub fn from_json(json: &Value, reg: &mut Registries) -> Result<Box<dyn FunctionO
 }
 
 /// A helper for registering a [`FunctionOpType`] on a [`Registries`].
-pub fn register_op(reg: &mut Registries, op: impl FunctionOpType + 'static) {
+pub fn register_op(reg: &mut Registries, op: impl FunctionOpType + Send + Sync + 'static) {
     reg.insert(op.name(), Box::new(op));
 }
 
