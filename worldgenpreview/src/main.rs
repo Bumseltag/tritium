@@ -13,6 +13,7 @@ use bevy::{
 };
 use bevy_framepace::{FramepacePlugin, FramepaceSettings};
 
+use crate::chunk::CHUNK_STORE;
 use crate::registry::{ChunkPos, ChunkTask, LoaderChannels, RegistriesHandle};
 use crate::{chunk::Chunk, textures::DynamicTextureAtlas};
 
@@ -134,6 +135,7 @@ fn reload(
             commands.entity(entity).despawn();
         }
     }
+    CHUNK_STORE.lock().unwrap().clear();
 }
 
 const RENDER_DISTANCE: i32 = 48;

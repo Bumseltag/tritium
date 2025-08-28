@@ -1,4 +1,8 @@
-use std::{hash::BuildHasher, str::FromStr};
+use std::{
+    hash::BuildHasher,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -31,6 +35,8 @@ const BLOCKS_PER_CHUNK: usize = 16 * 16 * CHUNK_HEIGHT;
 
 type BlockId = u8;
 
+pub static CHUNK_STORE: Mutex<HashMap<IVec2, Arc<Chunk>>> = Mutex::new(HashMap::new());
+
 #[derive(Component)]
 #[require(Mesh3d, MeshMaterial3d<StandardMaterial>)]
 pub struct Chunk {
@@ -42,15 +48,7 @@ pub struct Chunk {
     data: [BlockId; BLOCKS_PER_CHUNK],
 }
 
-pub static FULL_BLOCK: &(Block, LoadedBlock) = &(
-    Block::new(ResourceLocation::air(), Blockstate(HashMap::new())),
-    LoadedBlock {
-        mesh: CullableMeshSet::new(),
-        full_block: true,
-        never_culled: false,
-        empty: false,
-    },
-);
+pub static AIR: &(Block, LoadedBlock) = &Chunk::air();
 
 impl Chunk {
     pub const fn air() -> (Block, LoadedBlock) {
@@ -200,12 +198,12 @@ impl Chunk {
         &self.palette[palette_id as usize]
     }
 
-    pub fn index_or_full_block(&self, at: &I16Vec3) -> &(Block, LoadedBlock) {
+    pub fn index_or_air(&self, at: &I16Vec3) -> &(Block, LoadedBlock) {
         if !(0..16).contains(&at.x)
             || !(0..CHUNK_HEIGHT as i16).contains(&at.y)
             || !(0..16).contains(&at.z)
         {
-            return FULL_BLOCK;
+            return AIR;
         }
         let palette_id =
             self.data[at.x as usize + (16 * at.z as usize) + (const { 16 * 16 } * at.y as usize)];
@@ -245,14 +243,34 @@ impl DirectionBits {
     }
 }
 
+#[derive(Clone)]
+pub struct SurroundingChunks {
+    north: Option<Arc<Chunk>>, // -Z
+    east: Option<Arc<Chunk>>,  // +X
+    south: Option<Arc<Chunk>>, // +Z
+    west: Option<Arc<Chunk>>,  // -X
+}
+
+impl SurroundingChunks {
+    pub fn from_store_for(chunk_pos: &IVec2) -> Self {
+        let chunk_store = CHUNK_STORE.lock().unwrap();
+        Self {
+            north: chunk_store.get(&(chunk_pos - IVec2::Y)).cloned(),
+            east: chunk_store.get(&(chunk_pos + IVec2::X)).cloned(),
+            south: chunk_store.get(&(chunk_pos + IVec2::Y)).cloned(),
+            west: chunk_store.get(&(chunk_pos - IVec2::X)).cloned(),
+        }
+    }
+}
+
 pub struct CulledChunk {
-    chunk: Box<Chunk>,
+    chunk: Arc<Chunk>,
     non_culled: Vec<(U16Vec3, DirectionBits)>,
 }
 
 impl CulledChunk {
-    pub fn new(chunk: Box<Chunk>) -> Self {
-        let non_culled = Self::gen_chunk_culling_data(&chunk);
+    pub fn new(chunk: Arc<Chunk>, surroundings: &SurroundingChunks) -> Self {
+        let non_culled = Self::gen_chunk_culling_data(&chunk, surroundings);
         Self { chunk, non_culled }
     }
 
@@ -267,7 +285,10 @@ impl CulledChunk {
     }
 
     #[instrument(skip_all)]
-    fn gen_chunk_culling_data(chunk: &Chunk) -> Vec<(U16Vec3, DirectionBits)> {
+    fn gen_chunk_culling_data(
+        chunk: &Chunk,
+        surroundings: &SurroundingChunks,
+    ) -> Vec<(U16Vec3, DirectionBits)> {
         let mut non_culled = vec![];
 
         for y in 1..(CHUNK_HEIGHT as u16 - 1) {
@@ -275,21 +296,22 @@ impl CulledChunk {
                 for z in 1..15 {
                     Self::try_inner_cull(chunk, U16Vec3::new(x, y, z), &mut non_culled);
                 }
-                Self::try_edge_cull(chunk, U16Vec3::new(x, y, 0), &mut non_culled);
-                Self::try_edge_cull(chunk, U16Vec3::new(x, y, 15), &mut non_culled);
+                Self::try_edge_cull(chunk, U16Vec3::new(x, y, 0), &mut non_culled, surroundings);
+                Self::try_edge_cull(chunk, U16Vec3::new(x, y, 15), &mut non_culled, surroundings);
             }
             for z in 0..16 {
-                Self::try_edge_cull(chunk, U16Vec3::new(0, y, z), &mut non_culled);
-                Self::try_edge_cull(chunk, U16Vec3::new(15, y, z), &mut non_culled);
+                Self::try_edge_cull(chunk, U16Vec3::new(0, y, z), &mut non_culled, surroundings);
+                Self::try_edge_cull(chunk, U16Vec3::new(15, y, z), &mut non_culled, surroundings);
             }
         }
         for x in 0..16 {
             for z in 0..16 {
-                Self::try_edge_cull(chunk, U16Vec3::new(x, 0, z), &mut non_culled);
+                Self::try_edge_cull(chunk, U16Vec3::new(x, 0, z), &mut non_culled, surroundings);
                 Self::try_edge_cull(
                     chunk,
                     U16Vec3::new(x, CHUNK_HEIGHT as u16 - 1, z),
                     &mut non_culled,
+                    surroundings,
                 );
             }
         }
@@ -301,22 +323,27 @@ impl CulledChunk {
         let block = chunk.index_unchecked(&pos);
         let non_empty = !block.1.empty;
         if non_empty {
-            let dirs = Self::gen_block_culling_data_unchecked(chunk, &pos);
+            let dirs = Self::gen_block_culling_data(chunk, &pos);
             if (!dirs.is_empty()) || block.1.never_culled {
                 non_culled.push((pos, dirs));
             }
         }
     }
 
-    fn try_edge_cull(chunk: &Chunk, pos: U16Vec3, non_culled: &mut Vec<(U16Vec3, DirectionBits)>) {
+    fn try_edge_cull(
+        chunk: &Chunk,
+        pos: U16Vec3,
+        non_culled: &mut Vec<(U16Vec3, DirectionBits)>,
+        surroundings: &SurroundingChunks,
+    ) {
         let non_empty = !chunk.index_unchecked(&pos).1.empty;
         if non_empty {
-            let dirs = Self::gen_block_culling_data(chunk, &pos.as_i16vec3());
+            let dirs = Self::gen_edge_block_culling_data(chunk, &pos.as_i16vec3(), surroundings);
             non_culled.push((pos, dirs));
         }
     }
 
-    fn gen_block_culling_data_unchecked(chunk: &Chunk, block: &U16Vec3) -> DirectionBits {
+    fn gen_block_culling_data(chunk: &Chunk, block: &U16Vec3) -> DirectionBits {
         DirectionBits::from_each(
             !chunk
                 .index_unchecked(&U16Vec3::new(block.x, block.y + 1, block.z))
@@ -345,32 +372,65 @@ impl CulledChunk {
         )
     }
 
-    fn gen_block_culling_data(chunk: &Chunk, block: &I16Vec3) -> DirectionBits {
+    fn gen_edge_block_culling_data(
+        chunk: &Chunk,
+        block: &I16Vec3,
+        surroundings: &SurroundingChunks,
+    ) -> DirectionBits {
+        macro_rules! is_full_block_x {
+            ($pos:expr) => {{
+                let pos = $pos;
+                if pos.x < 0 {
+                    surroundings
+                        .west
+                        .as_ref()
+                        .map(|c| !c.index_unchecked(&pos.with_x(15).as_u16vec3()).1.full_block)
+                        .unwrap_or(false)
+                } else if pos.x > 15 {
+                    surroundings
+                        .east
+                        .as_ref()
+                        .map(|c| !c.index_unchecked(&pos.with_x(0).as_u16vec3()).1.full_block)
+                        .unwrap_or(false)
+                } else {
+                    !chunk.index_unchecked(&pos.as_u16vec3()).1.full_block
+                }
+            }};
+        }
+        macro_rules! is_full_block_z {
+            ($pos:expr) => {{
+                let pos = $pos;
+                if pos.z < 0 {
+                    surroundings
+                        .north
+                        .as_ref()
+                        .map(|c| !c.index_unchecked(&pos.with_z(15).as_u16vec3()).1.full_block)
+                        .unwrap_or(false)
+                } else if pos.z > 15 {
+                    surroundings
+                        .south
+                        .as_ref()
+                        .map(|c| !c.index_unchecked(&pos.with_z(0).as_u16vec3()).1.full_block)
+                        .unwrap_or(false)
+                } else {
+                    !chunk.index_unchecked(&pos.as_u16vec3()).1.full_block
+                }
+            }};
+        }
+
         DirectionBits::from_each(
             !chunk
-                .index_or_full_block(&I16Vec3::new(block.x, block.y + 1, block.z))
+                .index_or_air(&I16Vec3::new(block.x, block.y + 1, block.z))
                 .1
                 .full_block,
             !chunk
-                .index_or_full_block(&I16Vec3::new(block.x, block.y - 1, block.z))
+                .index_or_air(&I16Vec3::new(block.x, block.y - 1, block.z))
                 .1
                 .full_block,
-            !chunk
-                .index_or_full_block(&I16Vec3::new(block.x, block.y, block.z - 1))
-                .1
-                .full_block,
-            !chunk
-                .index_or_full_block(&I16Vec3::new(block.x, block.y, block.z + 1))
-                .1
-                .full_block,
-            !chunk
-                .index_or_full_block(&I16Vec3::new(block.x + 1, block.y, block.z))
-                .1
-                .full_block,
-            !chunk
-                .index_or_full_block(&I16Vec3::new(block.x - 1, block.y, block.z))
-                .1
-                .full_block,
+            is_full_block_z!(I16Vec3::new(block.x, block.y, block.z - 1)),
+            is_full_block_z!(I16Vec3::new(block.x, block.y, block.z + 1)),
+            is_full_block_x!(I16Vec3::new(block.x + 1, block.y, block.z)),
+            is_full_block_x!(I16Vec3::new(block.x - 1, block.y, block.z)),
         )
     }
 }

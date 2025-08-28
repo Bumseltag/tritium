@@ -39,6 +39,7 @@ use tracing::{error, info_span, instrument};
 use zip::ZipArchive;
 
 use crate::BlockMaterial;
+use crate::chunk::{CHUNK_STORE, SurroundingChunks};
 use crate::{
     AppState,
     chunk::{Chunk, CulledChunk, LoadedBlockModel},
@@ -100,23 +101,51 @@ impl<'a> AsMut<Registries> for RegistryGuard<'a> {
 #[derive(Component)]
 pub struct ChunkPos(pub IVec2);
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum ChunkTaskType {
+    Gen,
+    RegenCulling,
+}
+
 #[derive(Component)]
 pub struct ChunkTask {
     task: Option<Task<Mesh>>,
     cancelled: bool,
+    ty: ChunkTaskType,
 }
 
 impl ChunkTask {
+    /// Creates a new [`ChunkTask`] that generates a new chunk and its mesh.
+    /// If the chunk already exists, it will instead only recompute face culling.
     pub fn create(registries: RegistriesHandle, pos: IVec2) -> Self {
+        let chunk_store = CHUNK_STORE.lock().unwrap();
+        let existing_chunk = chunk_store.get(&pos).cloned();
+        let exists = existing_chunk.is_some();
+        drop(chunk_store);
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let chunk = Box::new(Chunk::generate_test_chunk(registries, pos));
-            let culled_chunk = CulledChunk::new(chunk);
-            culled_chunk.to_mesh().unwrap().to_bevy_mesh()
+            if let Some(existing_chunk) = existing_chunk {
+                let culled_chunk =
+                    CulledChunk::new(existing_chunk, &SurroundingChunks::from_store_for(&pos));
+                culled_chunk.to_mesh().unwrap().to_bevy_mesh()
+            } else {
+                let chunk = Arc::new(Chunk::generate_test_chunk(registries, pos));
+                let mut chunk_store = CHUNK_STORE.lock().unwrap();
+                chunk_store.insert(pos, chunk.clone());
+                drop(chunk_store);
+                let culled_chunk =
+                    CulledChunk::new(chunk, &SurroundingChunks::from_store_for(&pos));
+                culled_chunk.to_mesh().unwrap().to_bevy_mesh()
+            }
         });
 
         Self {
             task: Some(task),
             cancelled: false,
+            ty: if exists {
+                ChunkTaskType::RegenCulling
+            } else {
+                ChunkTaskType::Gen
+            },
         }
     }
 
@@ -124,6 +153,8 @@ impl ChunkTask {
         self.cancelled = true;
     }
 
+    /// Tries to complete the task if it is finished, and inserts the mesh into the world.
+    /// Returns true if the task is finished.
     fn try_complete(
         &mut self,
         self_entity: Entity,
@@ -131,10 +162,10 @@ impl ChunkTask {
         pos: &IVec2,
         atlas: &mut ResMut<DynamicTextureAtlas>,
         meshes: &mut ResMut<Assets<Mesh>>,
-    ) {
+    ) -> bool {
         if self.cancelled {
             commands.entity(self_entity).despawn();
-            return;
+            return false;
         }
         if self.task.as_ref().unwrap().is_finished() {
             let mesh = block_on(self.task.take().unwrap());
@@ -146,7 +177,9 @@ impl ChunkTask {
                     Transform::from_xyz(pos.x as f32 * 16.0, -64.0, pos.y as f32 * 16.0),
                 ))
                 .remove::<ChunkTask>();
+            return true;
         }
+        false
     }
 
     pub fn init_sys(
@@ -196,10 +229,33 @@ impl ChunkTask {
         mut commands: Commands,
         mut atlas: ResMut<DynamicTextureAtlas>,
         mut meshes: ResMut<Assets<Mesh>>,
-        mut query: Query<(Entity, &mut ChunkTask, &ChunkPos)>,
+        mut query: Query<(Entity, Option<&mut ChunkTask>, &ChunkPos)>,
+        registries: Res<RegistriesHandle>,
     ) {
-        for (entity, mut task, pos) in &mut query {
-            task.try_complete(entity, &mut commands, &pos.0, &mut atlas, &mut meshes);
+        let mut new_chunks = vec![];
+        for (entity, task, pos) in &mut query {
+            if let Some(mut task) = task {
+                let completed =
+                    task.try_complete(entity, &mut commands, &pos.0, &mut atlas, &mut meshes);
+                if completed && task.ty == ChunkTaskType::Gen {
+                    new_chunks.push(pos.0);
+                }
+            }
+        }
+        let mut surrounding_new_chunks = HashSet::new();
+        for new_chunk in new_chunks {
+            surrounding_new_chunks.insert(new_chunk + IVec2::X);
+            surrounding_new_chunks.insert(new_chunk - IVec2::X);
+            surrounding_new_chunks.insert(new_chunk + IVec2::Y);
+            surrounding_new_chunks.insert(new_chunk - IVec2::Y);
+        }
+        for (entity, task, pos) in &mut query {
+            // is chunk already generated?
+            if task.is_none() && surrounding_new_chunks.contains(&pos.0) {
+                commands
+                    .entity(entity)
+                    .insert(ChunkTask::create(registries.clone(), pos.0));
+            }
         }
     }
 
