@@ -2,6 +2,7 @@ use std::fs;
 use std::time::Duration;
 
 use bevy::app::TaskPoolThreadAssignmentPolicy;
+use bevy::core_pipeline::smaa::{Smaa, SmaaPreset};
 use bevy::ecs::system::SystemId;
 use bevy::platform::collections::HashSet;
 use bevy::window::{PresentMode, WindowResolution, WindowTheme};
@@ -53,7 +54,6 @@ fn main() {
     .init_state::<AppState>()
     .add_systems(Startup, (setup_scene, setup_stats))
     .add_systems(OnEnter(AppState::Loading), ChunkTask::init_sys)
-    // .add_systems(OnEnter(AppState::Main), spawn_example_chunks)
     .add_systems(
         Update,
         (
@@ -88,6 +88,10 @@ fn setup_scene(mut commands: Commands) {
             color: Color::srgb_u8(255, 255, 255),
             brightness: 1000.0,
             ..Default::default()
+        },
+        Msaa::Off,
+        Smaa {
+            preset: SmaaPreset::High,
         },
     ));
 
@@ -410,3 +414,5 @@ fn stats_font(asset_server: &AssetServer) -> TextFont {
         ..Default::default()
     }
 }
+
+type BlockMaterial = StandardMaterial;

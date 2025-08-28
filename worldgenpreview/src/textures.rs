@@ -9,7 +9,10 @@ use bevy::{
 use guillotiere::Size;
 use mcpackloader::{ResourceLocation, ResourceParseError, textures::Texture};
 
-use crate::registry::{FromLoader, LoadedResource, Registries, Registry, RegistryResource};
+use crate::{
+    BlockMaterial,
+    registry::{FromLoader, LoadedResource, Registries, Registry, RegistryResource},
+};
 
 pub struct LoadedTexture {
     pub atlas_pos: Vec2,
@@ -55,7 +58,7 @@ pub struct DynamicTextureAtlas {
     pub atlas: Handle<Image>,
     pub layout: Handle<TextureAtlasLayout>,
     pub builder: DynamicTextureAtlasBuilder,
-    pub material: Handle<StandardMaterial>,
+    pub material: Handle<BlockMaterial>,
 }
 
 impl DynamicTextureAtlas {
@@ -91,7 +94,7 @@ impl FromWorld for DynamicTextureAtlas {
         let atlas = images.add(image);
         let mut layouts = world.resource_mut::<Assets<TextureAtlasLayout>>();
         let layout = layouts.add(TextureAtlasLayout::new_empty(uvec2(ATLAS_SIZE, ATLAS_SIZE)));
-        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+        let mut materials = world.resource_mut::<Assets<BlockMaterial>>();
         let material = materials.add(StandardMaterial {
             base_color: Color::WHITE,
             base_color_texture: Some(atlas.clone()),

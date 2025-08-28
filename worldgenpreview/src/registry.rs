@@ -20,7 +20,7 @@ use bevy::{
     },
     image::{Image, TextureAtlasLayout},
     math::IVec2,
-    pbr::{MeshMaterial3d, StandardMaterial},
+    pbr::MeshMaterial3d,
     platform::collections::{HashMap, HashSet},
     render::mesh::{Mesh, Mesh3d},
     tasks::AsyncComputeTaskPool,
@@ -38,6 +38,7 @@ use mcpackloader::{
 use tracing::{error, info_span, instrument};
 use zip::ZipArchive;
 
+use crate::BlockMaterial;
 use crate::{
     AppState,
     chunk::{Chunk, CulledChunk, LoadedBlockModel},
@@ -206,7 +207,7 @@ impl ChunkTask {
         mut atlas: ResMut<DynamicTextureAtlas>,
         mut layouts: ResMut<Assets<TextureAtlasLayout>>,
         mut images: ResMut<Assets<Image>>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
+        mut materials: ResMut<Assets<BlockMaterial>>,
         channels: ResMut<LoaderChannels>,
     ) {
         while let Ok(msg) = channels.from_loader.try_recv() {

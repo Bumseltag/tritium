@@ -9,13 +9,7 @@ use bevy::{
     render::mesh::{Indices, PrimitiveTopology},
 };
 use bitflags::bitflags;
-use libworldgen::{
-    density_function::{
-        FunctionOp, from_json,
-        std_ops::{Add, Noise, YClampedGradient},
-    },
-    random::XoroshiroRng,
-};
+use libworldgen::density_function::{FunctionOp, from_json};
 use mcpackloader::{
     ResourceLocation, ResourceParseError,
     blockstates::{
@@ -24,7 +18,7 @@ use mcpackloader::{
     },
     models::{self, BlockModel, Direction, Element, ElementRotation, RotationAxis},
     textures::Texture,
-    worldgen::{DensityFunction, NoiseParameters},
+    worldgen::DensityFunction,
 };
 
 use crate::{
@@ -70,17 +64,15 @@ impl Chunk {
     pub fn generate_test_chunk(registries: RegistriesHandle, pos: IVec2) -> Self {
         let mut palette = [const { Self::air() }; u8::MAX as usize];
         let mut registries = registries.lock();
-        let stone = Block::new_with_state(ResourceLocation::new_mc("stone"), vec![]);
-        palette[1] = stone
-            .into_palette_format(registries.as_mut())
-            .unwrap_or(Self::air());
+        let stone = Block::new_with_state(ResourceLocation::new_mc("end_stone"), vec![]);
+        palette[1] = stone.into_palette_format(registries.as_mut()).unwrap();
         let grass_block = Block::new_with_state(
-            ResourceLocation::new_mc("grass_block"),
+            ResourceLocation::new_mc("end_stone"),
             vec![("snowy".into(), Property::Bool(false))],
         );
         palette[2] = grass_block
             .into_palette_format(registries.as_mut())
-            .unwrap_or(Self::air());
+            .unwrap();
 
         let df = registries
             .get_or_load::<DensityFunction>(&ResourceLocation::new("worldgenpreview", "test"))
@@ -301,8 +293,6 @@ impl CulledChunk {
                 );
             }
         }
-
-        // info!("not culled: {}", non_culled.len());
 
         non_culled
     }
