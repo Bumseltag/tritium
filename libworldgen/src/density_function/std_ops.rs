@@ -909,15 +909,15 @@ pub struct ConstantJson {
 /// Clamps the Y coordinate between `from_y` and `to_y` and then linearly maps it to a range.
 #[derive(Deserialize)]
 pub struct YClampedGradient {
-    pub from_y: i32,
-    pub to_y: i32,
+    pub from_y: f64,
+    pub to_y: f64,
     pub from_value: f64,
     pub to_value: f64,
 }
 
 impl FunctionOp for YClampedGradient {
     fn run_once(&self, pos: &I64Vec3) -> f64 {
-        let t = (pos.y as f64 - self.from_y as f64) / (self.to_y - self.from_y) as f64;
+        let t = (pos.y as f64 - self.from_y) / (self.to_y - self.from_y);
         clamped_lerp(self.from_value, self.to_value, t)
     }
 
